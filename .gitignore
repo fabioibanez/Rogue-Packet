@@ -1,7 +1,7 @@
 
 ### CUSTOM ADDED BY ROGUE PACKET PROJECTS ###
 torrents/
-*.iso
+*iso
 
 .DS_Store
 pytorrent/
