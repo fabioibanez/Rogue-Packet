@@ -1,6 +1,20 @@
 
 # PyTorrent
 
+# Helpful Commands
+**If you want to ping a ip + port number:**
+`nc -zv IP_ADDRESS_HERE PORT_NUMBER`
+
+**Ping an ip:**
+`ping IP_ADDRESS_HERE`
+
+**View torrent pretty printed**
+```bash
+brew install transmission
+transmission-show PATH_TO_TORRENT
+```
+
+# Original Code
 
 PyTorrent is a CLI tool that downloads files from the **BitTorrent** network.
 
