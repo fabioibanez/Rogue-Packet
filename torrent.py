@@ -1,5 +1,4 @@
 import math
-from pprint import pprint
 
 from helpers import print_torrent
 
