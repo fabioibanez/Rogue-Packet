@@ -1,4 +1,7 @@
 import math
+from pprint import pprint
+
+from helpers import print_torrent
 
 __author__ = 'alexisgallepe'
 
@@ -26,6 +29,8 @@ class Torrent(object):
             contents = bdecode(file)
 
         self.torrent_file = contents
+        print_torrent(self.torrent_file)
+        
         self.piece_length = self.torrent_file['info']['piece length']
         self.pieces = self.torrent_file['info']['pieces']
         raw_info_hash = bencode(self.torrent_file['info'])
