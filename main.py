@@ -1,3 +1,7 @@
+#     #!/usr/bin/env python
+#     # -*- coding: utf-8 -*-
+
+from pprint import pprint
 import sys
 from block import State
 
@@ -13,6 +17,8 @@ import os
 import message
 
 
+SLEEP_FOR_NO_UNCHOKED: int = 1
+
 class Run(object):
     percentage_completed = -1
     last_log_line = ""
@@ -24,26 +30,40 @@ class Run(object):
             logging.error("No torrent file provided!")
             sys.exit(0)
         
-        self.torrent = torrent.Torrent().load_from_path(torrent_file)
-        self.tracker = tracker.Tracker(self.torrent)
+        # Declares a torrent object for the particular torrent file specified by the user
+        self.torrent: torrent.Torrent = torrent.Torrent().load_from_path(path=torrent_file)
+        # Declares a tracker object
+        self.tracker: tracker.Tracker = tracker.Tracker(self.torrent)
+        
+        self.pieces_manager: pieces_manager.PiecesManager = pieces_manager.PiecesManager(torrent=self.torrent)
+        # NOTE: `peers_manager.PeersManager` is actually inherited from `threading.Thread`
+        self.peers_manager: peers_manager.PeersManager = peers_manager.PeersManager(torrent=self.torrent,
+                                                                                    pieces_manager=self.pieces_manager)
 
-        self.pieces_manager = pieces_manager.PiecesManager(self.torrent)
-        self.peers_manager = peers_manager.PeersManager(self.torrent, self.pieces_manager)
-
-        self.peers_manager.start()
+        self.peers_manager.start()  # This starts the peer manager thread:
         logging.info("PeersManager Started")
         logging.info("PiecesManager Started")
 
     def start(self):
-        peers_dict = self.tracker.get_peers_from_trackers()
+        # Get all the peers from the trackers (which was embedded in the `announce_list` field of the  torrent file
+        # provided by the user via a CLI option)
+        
+        peers_dict: dict = self.tracker.get_peers_from_trackers()
+        
+        # Tell the peers_manager who our peers are
+        # A peer is anyone we have an open TCP connection with
+        # so this will ultimately `be many more connections than we actually download from 
         self.peers_manager.add_peers(peers_dict.values())
 
+        # While we haven't finished downloading the file
         while not self.pieces_manager.all_pieces_completed():
+            # if there's no one can give us data then we wait
             if not self.peers_manager.has_unchoked_peers():
-                time.sleep(1)
+                time.sleep(SLEEP_FOR_NO_UNCHOKED)
                 logging.info("No unchocked peers")
                 continue
-
+            
+            # At this point, we have peers that can help us out.
             for piece in self.pieces_manager.pieces:
                 index = piece.piece_index
 
