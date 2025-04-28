@@ -23,6 +23,7 @@ class Run(object):
         except IndexError:
             logging.error("No torrent file provided!")
             sys.exit(0)
+        
         self.torrent = torrent.Torrent().load_from_path(torrent_file)
         self.tracker = tracker.Tracker(self.torrent)
 
@@ -102,7 +103,10 @@ class Run(object):
 
 
 if __name__ == '__main__':
+    # Usage: clear && time python main.py <torrent_file>
+    
     logging.basicConfig(level=logging.DEBUG)
 
+    # Initializes the run object
     run = Run()
     run.start()
