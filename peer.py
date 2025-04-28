@@ -66,15 +66,19 @@ class Peer(object):
     def am_unchoking(self):
         return not self.am_choking()
 
+    # They are choking us (they don't send us data)
     def is_choking(self):
         return self.state['peer_choking']
 
+    # This means that they are not choking us (aka they are sending us data)
     def is_unchoked(self):
         return not self.is_choking()
 
     def is_interested(self):
         return self.state['peer_interested']
 
+    # We are interested in them (we want to download data from them)
+    # becuase they have pieces we don't have (probably based on bitfields)
     def am_interested(self):
         return self.state['am_interested']
 
@@ -105,6 +109,12 @@ class Peer(object):
         logging.debug('handle_have - ip: %s - piece: %s' % (self.ip, have.piece_index))
         self.bit_field[have.piece_index] = True
 
+        # NOTE: Piece Revelation
+        # This is a peer telling us that they have a piece we don't have
+        # We need to update our bitfield to reflect this
+
+        # If they are choking us (aka we're not getting data from them),
+        # and we are not interested in them
         if self.is_choking() and not self.state['am_interested']:
             interested = message.Interested().to_bytes()
             self.send_to_peer(interested)

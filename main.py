@@ -1,6 +1,15 @@
 #     #!/usr/bin/env python
 #     # -*- coding: utf-8 -*-
 
+"""
+# TODO: Things we need to do to modify this repository:
+
+1. Proportional Share
+> Status Quo: The current implementation picks a random peer at random and asks them for data.
+
+# TODO
+"""
+
 from pprint import pprint
 import sys
 from block import State
@@ -63,19 +72,30 @@ class Run(object):
                 logging.info("No unchocked peers")
                 continue
             
-            # At this point, we have peers that can help us out.
+            # At this point, we have peers that can help us out / aka give us data
+            
+            # We go through every piece for the torrent file (based on what was inside the torrent file provided by the user)
             for piece in self.pieces_manager.pieces:
+                # TODO: Unsure of this?
                 index = piece.piece_index
 
+                # If we have all the blocks for this piece, we can skip it
+                # and move on to the next piece
                 if self.pieces_manager.pieces[index].is_full:
                     continue
-
+                
+                # If we're here, we DON"T have all the blocks for this piece
+                # We need to ask a peer for a block of this piece
                 peer = self.peers_manager.get_random_peer_having_piece(index)
+                # If we didn't find any such peer that has the piece, we try again
                 if not peer:
                     continue
-
+                
+                # If I request a block from someone and I haven't received it from them,
+                # they're fucking lackadaisical and I don't want to be their friend anymore
                 self.pieces_manager.pieces[index].update_block_status()
-
+                
+                # Gets an empty block for the piece
                 data = self.pieces_manager.pieces[index].get_empty_block()
                 if not data:
                     continue

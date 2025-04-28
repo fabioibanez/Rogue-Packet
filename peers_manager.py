@@ -28,6 +28,8 @@ class PeersManager(Thread):
         pub.subscribe(self.peer_requests_piece, 'PeersManager.PeerRequestsPiece')
         pub.subscribe(self.peers_bitfield, 'PeersManager.updatePeersBitfield')
 
+    # NOTE: I'm not going to tell peers out of my own volition what pieces I have,
+    # but I will respond to their requests for pieces.
     def peer_requests_piece(self, request=None, peer=None):
         if not request or not peer:
             logging.error("empty request/peer message")
@@ -47,6 +49,9 @@ class PeersManager(Thread):
                 self.pieces_by_peer[i][0] = len(self.pieces_by_peer[i][1])
 
     def get_random_peer_having_piece(self, index):
+        """
+        peer 
+        """
         ready_peers = []
 
         for peer in self.peers:

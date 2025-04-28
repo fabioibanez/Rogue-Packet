@@ -21,6 +21,8 @@ class PiecesManager(object):
 
         # events
         pub.subscribe(self.receive_block_piece, 'PiecesManager.Piece')
+        # NOTE: Once a piece is completed, we update the bitfield
+        # to indicate that the piece is completed
         pub.subscribe(self.update_bitfield, 'PiecesManager.PieceCompleted')
 
     def update_bitfield(self, piece_index):
@@ -37,7 +39,6 @@ class PiecesManager(object):
         if self.pieces[piece_index].are_all_blocks_full():
             if self.pieces[piece_index].set_to_full():
                 self.complete_pieces +=1
-
 
     def get_block(self, piece_index, block_offset, block_length):
         for piece in self.pieces:
