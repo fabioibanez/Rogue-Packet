@@ -28,11 +28,12 @@ class PeersManager(Thread):
         pub.subscribe(self.peer_requests_piece, 'PeersManager.PeerRequestsPiece')
         pub.subscribe(self.peers_bitfield, 'PeersManager.updatePeersBitfield')
 
-    # NOTE: I'm not going to tell peers out of my own volition what pieces I have,
-    # but I will respond to their requests for pieces.
     def peer_requests_piece(self, request=None, peer=None):
         if not request or not peer:
             logging.error("empty request/peer message")
+            
+        if peer.am_choking():
+            return
 
         piece_index, block_offset, block_length = request.piece_index, request.block_offset, request.block_length
 
@@ -40,6 +41,7 @@ class PeersManager(Thread):
         if block:
             piece = message.Piece(piece_index, block_offset, block_length, block).to_bytes()
             peer.send_to_peer(piece)
+            # TODO: keep track of the amount of data sent to each peer
             logging.info("Sent piece index {} to peer : {}".format(request.piece_index, peer.ip))
 
     def peers_bitfield(self, bitfield=None):
@@ -49,9 +51,6 @@ class PeersManager(Thread):
                 self.pieces_by_peer[i][0] = len(self.pieces_by_peer[i][1])
 
     def get_random_peer_having_piece(self, index):
-        """
-        peer 
-        """
         ready_peers = []
 
         for peer in self.peers:

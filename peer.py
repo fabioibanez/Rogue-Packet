@@ -28,6 +28,7 @@ class Peer(object):
             'peer_choking': True,
             'peer_interested': False,
         }
+        self.throughput = 0
 
     def __hash__(self):
         return "%s:%d" % (self.ip, self.port)
@@ -47,6 +48,7 @@ class Peer(object):
 
     def send_to_peer(self, msg):
         try:
+            # TODO: rolling average for self.throughput
             self.socket.send(msg)
             self.last_call = time.time()
         except Exception as e:
