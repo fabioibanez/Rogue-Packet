@@ -49,10 +49,10 @@ class Run(object):
         self.args = args
         
         # Declares a torrent object for the particular torrent file specified by the user
+        if args.deletetorrent:
+            cleanup_torrent_download(torrent_file=args.torrent_file)
         self.torrent: torrent.Torrent = torrent.Torrent().load_from_path(path=args.torrent_file)
         
-        if args.deletetorrent:
-            cleanup_torrent_download(torrent_file=self.torrent.path)
         
         # Declares a tracker object
         self.tracker: tracker.Tracker = tracker.Tracker(self.torrent)
@@ -75,7 +75,7 @@ class Run(object):
     def _start_plot_thread(self) -> None:
         """Start the plot thread if a matching directory is found"""
         # Extract directory name from torrent path
-        torrent_name = os.path.splitext(os.path.basename(self.torrent.path))[0]
+        torrent_name = os.path.splitext(os.path.basename(self.args.torrent_file))[0]
         torrent_dir = torrent_name
         
         if os.path.isdir(torrent_dir):
