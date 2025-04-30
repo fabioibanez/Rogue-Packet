@@ -16,11 +16,13 @@ import message
 
 class PeerStats:
     """Encapsulates peer statistics for proportional share matching"""
+    NO_DATA_SENTINEL: int = 0
+    
     def __init__(self):
-        self.bytes_uploaded = 0
-        self.bytes_downloaded = 0
-        self.last_upload_time = 0.0
-        self.last_download_time = 0.0
+        self.bytes_uploaded = PeerStats.NO_DATA_SENTINEL
+        self.bytes_downloaded = PeerStats.NO_DATA_SENTINEL
+        self.last_upload_time = PeerStats.NO_DATA_SENTINEL
+        self.last_download_time = PeerStats.NO_DATA_SENTINEL
 
     def update_upload(self, bytes_sent: int) -> None:
         self.bytes_uploaded += bytes_sent
@@ -35,6 +37,10 @@ class PeerStats:
             return float('inf')
         return self.bytes_uploaded / self.bytes_downloaded
 
+
+##################
+##################
+##################
 
 class Peer(object):
     def __init__(self, number_of_pieces, ip, port=6881):
@@ -163,19 +169,23 @@ class Peer(object):
 
         # pub.sendMessage('RarestPiece.updatePeersBitfield', bitfield=self.bit_field)
 
-    def handle_request(self, request):
+    def handle_request(self, request: message.Request):
         """
         :type request: message.Request
         """
         logging.debug('handle_request - %s' % self.ip)
         if self.is_interested() and self.is_unchoked():
             pub.sendMessage('PiecesManager.PeerRequestsPiece', request=request, peer=self)
+            # NOTE: by shounak, track upload when sending pieces
+            self.update_upload_stats(len(request.to_bytes()))
 
-    def handle_piece(self, message):
+    def handle_piece(self, message: message.Piece):
         """
         :type message: message.Piece
         """
         pub.sendMessage('PiecesManager.Piece', piece=(message.piece_index, message.block_offset, message.block))
+        # NOTE: by shounak, track download when receiving pieces
+        self.update_download_stats(len(message.block))
 
     def handle_cancel(self):
         logging.debug('handle_cancel - %s' % self.ip)

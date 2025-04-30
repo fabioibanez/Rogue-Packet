@@ -60,6 +60,14 @@ class RandomProportionalShareStrategy(PeerSelector):
     def get_name(cls) -> str:
         return "proportional-random"
 
+class AuctionProportionalShareStrategy(PeerSelector):
+    """Auction-based proportional share matching peer selection strategy"""
+    def select_peer(self, peers: List[peer.Peer], piece_index: int) -> Optional[peer.Peer]:
+        ready_peers = PeerSelector.get_ready_peers(peers, piece_index)
+        if not ready_peers:
+            return None
+        
+        raise NotImplementedError("Auction-based proportional share matching peer selection strategy not implemented")
 
 ##################
 ##################
@@ -67,5 +75,6 @@ class RandomProportionalShareStrategy(PeerSelector):
 
 MAPPING_PEER_SELECTION_METHODS: Dict[str, PeerSelector] = {
     'random': RandomSelectionStrategy(),
-    'proportional-random': RandomProportionalShareStrategy()
+    'proportional-random': RandomProportionalShareStrategy(),
+    'auction-proportional': AuctionProportionalShareStrategy()
 }

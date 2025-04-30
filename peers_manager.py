@@ -36,10 +36,7 @@ class PiecePeerInfo:
 ##################
 ##################
 
-class PeersManager(Thread):
-    NO_PEERS_SENTINEL: List[peer.Peer] = []
-    NO_PEERS_HAVE_PIECE_SENTINEL: int = 0
-    
+class PeersManager(Thread):    
     def __init__(self, torrent: torrent.Torrent,
                  pieces_manager: pieces_manager.PiecesManager,
                  peer_selection_strategy: str = 'random') -> None:
@@ -222,14 +219,9 @@ class PeersManager(Thread):
 
         elif isinstance(new_message, message.Request):
             peer.handle_request(new_message)
-            # Track upload when sending pieces
-            if peer.is_interested() and peer.is_unchoked():
-                peer.update_upload_stats(len(new_message.to_bytes()))
 
         elif isinstance(new_message, message.Piece):
             peer.handle_piece(new_message)
-            # Track download when receiving pieces
-            peer.update_download_stats(len(new_message.block))
 
         elif isinstance(new_message, message.Cancel):
             peer.handle_cancel()
