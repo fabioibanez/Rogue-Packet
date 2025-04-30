@@ -21,6 +21,7 @@ class PeerSelector(ABC):
                 p.has_piece(piece_index)]
     
     @abstractmethod
+    @typechecked
     def select_peer(self, peers: List[peer.Peer], piece_index: int) -> Optional[peer.Peer]:
         """Select a peer from the given list that has the specified piece"""
         pass
@@ -28,6 +29,8 @@ class PeerSelector(ABC):
 
 class RandomSelectionStrategy(PeerSelector):
     """Simple random peer selection strategy"""
+    
+    @typechecked
     def select_peer(self, peers: List[peer.Peer], piece_index: int) -> Optional[peer.Peer]:
         ready_peers = PeerSelector.get_ready_peers(peers, piece_index)
         if not ready_peers:
@@ -37,6 +40,8 @@ class RandomSelectionStrategy(PeerSelector):
 # btw this isn't actually the proportional share strategy mentioned in the paper.
 class RandomProportionalShareStrategy(PeerSelector):
     """Proportional share matching peer selection strategy"""
+    
+    @typechecked
     def select_peer(self, peers: List[peer.Peer], piece_index: int) -> Optional[peer.Peer]:
         ready_peers = PeerSelector.get_ready_peers(peers, piece_index)
         if not ready_peers:
@@ -55,10 +60,6 @@ class RandomProportionalShareStrategy(PeerSelector):
 
         probabilities = [r / total_ratio for r in ratios]
         return random.choices(ready_peers, weights=probabilities, k=1)[0]
-
-    @classmethod
-    def get_name(cls) -> str:
-        return "proportional-random"
 
 class AuctionProportionalShareStrategy(PeerSelector):
     """Auction-based proportional share matching peer selection strategy"""
