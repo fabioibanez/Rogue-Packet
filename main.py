@@ -44,7 +44,7 @@ class Run(object):
         parser.add_argument('-v', '--verbose', action='store_true',
                           help='Enable verbose logging for peer selection')
         parser.add_argument('-d', '--deletetorrent', action='store_true',
-                          help='Delete the torrent file after download. For seamless testing.')
+                          help='Delete any existing, previous torrent folder for your specified torrent target. Speeds up testing.')
         args = parser.parse_args()
         self.args = args
         
