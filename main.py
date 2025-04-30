@@ -129,7 +129,7 @@ class Run(object):
                 
                 # If we're here, we DON"T have all the blocks for this piece
                 # We need to ask a peer for a block of this piece
-                peer: 'peer.Peer' = self.peers_manager.get_random_peer_having_piece(index)
+                peer: 'peer.Peer' = self.peers_manager.elect_a_peer(index)
                 # If we didn't find any such peer that has the piece, we try again
                 if not peer:
                     if self.verbose:

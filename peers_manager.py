@@ -95,7 +95,7 @@ class PeersManager(Thread):
                 self.pieces_by_peer[i].peers.append(peer)
                 self.pieces_by_peer[i].peer_count = len(self.pieces_by_peer[i].peers)
 
-    def get_random_peer_having_piece(self, index: int) -> Optional[peer.Peer]:
+    def elect_a_peer(self, index: int) -> Optional[peer.Peer]:
         """Returns a peer that has the specified piece using the configured selection strategy"""
         return self.peer_selection_strategy.select_peer(self.peers, index)
 
