@@ -1,12 +1,10 @@
 # peers_manager.py
 
-import time
-from typing import List, Dict, Tuple, Optional, Any, Set, Type, Union
+import random
+from typing import List, Optional, Any, Type
 from dataclasses import dataclass
-from abc import ABC, abstractmethod
 
 import pieces_manager
-from strategies import MAPPING_PEER_SELECTION_METHODS, PeerSelector
 import torrent
 
 __author__ = 'alexisgallepe'
@@ -20,7 +18,6 @@ import message
 import peer
 import errno
 import socket
-import random
 
 ##################
 ##################
@@ -38,8 +35,7 @@ class PiecePeerInfo:
 
 class PeersManager(Thread):    
     def __init__(self, torrent: torrent.Torrent,
-                 pieces_manager: pieces_manager.PiecesManager,
-                 peer_selection_strategy: str = 'random') -> None:
+                 pieces_manager: pieces_manager.PiecesManager) -> None:
         Thread.__init__(self)
         self.peers: List[peer.Peer] = []  # List of connected peers
         self.torrent: torrent.Torrent = torrent  # Torrent metadata
@@ -51,9 +47,6 @@ class PeersManager(Thread):
         # [peers] is a list of peers that have the piece
         self.pieces_by_peer: List[PiecePeerInfo] = [PiecePeerInfo(0, []) for _ in range(pieces_manager.number_of_pieces)]
         self.is_active: bool = True  # Controls the main thread loop
-
-        # Set the peer selection strategy
-        self.peer_selection_strategy: Type[PeerSelector] = MAPPING_PEER_SELECTION_METHODS[peer_selection_strategy]
 
         # Events
         pub.subscribe(self.peer_requests_piece, 'PeersManager.PeerRequestsPiece')
@@ -80,21 +73,28 @@ class PeersManager(Thread):
     def peers_bitfield(self, bitfield: Optional[Any] = None) -> None:
         for i in range(len(self.pieces_by_peer)):
             # Check if the peer has this piece (bitfield[i] == 1)
-            PEER_HAS_PIECE: bool = bitfield[i] == 1
+            peer_has_piece: bool = bitfield[i] == 1
             
             # Check if this peer is not already in our list of peers that have this piece
-            PEER_NOT_TRACKED: bool = peer not in self.pieces_by_peer[i].peers
+            peer_not_tracked: bool = peer not in self.pieces_by_peer[i].peers
             
             # Check if we're already tracking peers for this piece (count > 0)
-            PIECE_HAS_PEERS: bool = self.pieces_by_peer[i].peer_count > 0
+            piece_has_peers: bool = self.pieces_by_peer[i].peer_count > 0
             
-            if PEER_HAS_PIECE and PEER_NOT_TRACKED and PIECE_HAS_PEERS:
+            if peer_has_piece and peer_not_tracked and piece_has_peers:
                 self.pieces_by_peer[i].peers.append(peer)
                 self.pieces_by_peer[i].peer_count = len(self.pieces_by_peer[i].peers)
 
-    def elect_a_peer(self, index: int) -> Optional[peer.Peer]:
-        """Returns a peer that has the specified piece using the configured selection strategy"""
-        return self.peer_selection_strategy.select_peer(self.peers, index)
+    def get_random_peer_having_piece(self, index: int) -> Optional[peer.Peer]:
+        ready_peers = []
+
+        for peer in self.peers:
+            if peer.is_eligible() and peer.is_unchoked() and peer.am_interested() and peer.has_piece(index):
+                ready_peers.append(peer)
+
+        # TODO: Select peer in ready list that has had highest historical upload bandwidth to us
+
+        return random.choice(ready_peers) if ready_peers else None
 
     def has_unchoked_peers(self) -> bool:
         for peer in self.peers:

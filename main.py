@@ -11,18 +11,13 @@
 # TODO
 """
 
-from pprint import pprint
-import sys
 import argparse
 from block import State
 from helpers import plot_dirsize_overtime
 from peers_manager import MAPPING_PEER_SELECTION_METHODS
-import re
 import os
 import threading
 import time
-import matplotlib.pyplot as plt
-from pathlib import Path
 
 __author__ = 'alexisgallepe'
 
@@ -47,9 +42,6 @@ class Run(object):
     def __init__(self):
         parser = argparse.ArgumentParser(description='BitTorrent client')
         parser.add_argument('torrent_file', help='Path to the torrent file')
-        parser.add_argument('--peer-selection', type=str, default='random',
-                          choices=MAPPING_PEER_SELECTION_METHODS,
-                          help='Peer selection strategy to use')
         parser.add_argument('-v', '--verbose', action='store_true',
                           help='Enable verbose logging for peer selection')
         args = parser.parse_args()
@@ -64,8 +56,7 @@ class Run(object):
         # NOTE: `peers_manager.PeersManager` is actually inherited from `threading.Thread`
         self.peers_manager: peers_manager.PeersManager = peers_manager.PeersManager(
             torrent=self.torrent,
-            pieces_manager=self.pieces_manager,
-            peer_selection_strategy=args.peer_selection
+            pieces_manager=self.pieces_manager
         )
         self.verbose = args.verbose
 
@@ -129,7 +120,7 @@ class Run(object):
                 
                 # If we're here, we DON"T have all the blocks for this piece
                 # We need to ask a peer for a block of this piece
-                peer: 'peer.Peer' = self.peers_manager.elect_a_peer(index)
+                peer: 'peer.Peer' = self.peers_manager.get_random_peer_having_piece(index)
                 # If we didn't find any such peer that has the piece, we try again
                 if not peer:
                     if self.verbose:
