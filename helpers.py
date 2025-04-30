@@ -70,17 +70,6 @@ def plot_dirsize_overtime(dir_path: str, stop_event: threading.Event, save_path:
         time.sleep(PLOT_INTERVAL)
 
 def cleanup_torrent_download(torrent_file: str) -> None:
-    """
-    Deletes all files in the current directory that match the pattern of the torrent file name.
-    """
-    
-    if os.path.exists(_target := os.path.splitext(os.path.basename(torrent_file))[0]):
-        shutil.rmtree(_target, ignore_errors=True)
-        print("\033[1;32m")  # Bold green text
-        print(f"[UTILITY] Deleted previous torrent folder @ '{_target}'.")
-        print("\033[0m")  # Reset text formatting
-    else:
-        print("\033[1;32m")
-        print(f"[UTILITY] No previous torrent folder found to delete @ '{_target}'.")
-        print("\033[0m")
-    time.sleep(1)
+    """Deletes all files in the current directory that match the pattern of the torrent file name."""
+    shutil.rmtree(_target := os.path.splitext(os.path.basename(torrent_file))[0], ignore_errors=True)
+    print(f"\033[1;32m[UTILITY] Attempted cleanup of torrent folder @ '{_target}'\033[0m")
