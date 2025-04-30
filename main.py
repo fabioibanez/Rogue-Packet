@@ -13,8 +13,7 @@
 
 import argparse
 from block import State
-from helpers import plot_dirsize_overtime
-from peers_manager import MAPPING_PEER_SELECTION_METHODS
+from helpers import cleanup_torrent_download, plot_dirsize_overtime
 import os
 import threading
 import time
@@ -44,11 +43,17 @@ class Run(object):
         parser.add_argument('torrent_file', help='Path to the torrent file')
         parser.add_argument('-v', '--verbose', action='store_true',
                           help='Enable verbose logging for peer selection')
+        parser.add_argument('-d', '--deletetorrent', action='store_true',
+                          help='Delete the torrent file after download. For seamless testing.')
         args = parser.parse_args()
         self.args = args
         
         # Declares a torrent object for the particular torrent file specified by the user
         self.torrent: torrent.Torrent = torrent.Torrent().load_from_path(path=args.torrent_file)
+        
+        if args.deletetorrent:
+            cleanup_torrent_download(torrent_file=self.torrent.path)
+        
         # Declares a tracker object
         self.tracker: tracker.Tracker = tracker.Tracker(self.torrent)
         
@@ -66,7 +71,6 @@ class Run(object):
         
         logging.info("PeersManager Started")
         logging.info("PiecesManager Started")
-        logging.info(f"\033[1;32mUsing peer selection strategy: {args.peer_selection}\033[0m")
 
     def _start_plot_thread(self) -> None:
         """Start the plot thread if a matching directory is found"""
@@ -78,7 +82,7 @@ class Run(object):
             logging.info(f"\033[1;32mStarted plotting directory size for: {torrent_dir}\033[0m")
             plot_thread = threading.Thread(
                 target=plot_dirsize_overtime,
-                args=(torrent_dir, self.plot_stop_event, f"{torrent_dir}-{self.args.peer_selection}.png"),
+                args=(torrent_dir, self.plot_stop_event, f"{torrent_dir}.png"),
                 daemon=True
             )
             plot_thread.start()

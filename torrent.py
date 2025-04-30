@@ -2,7 +2,7 @@
 
 import math
 
-from helpers import cleanup_torrent_download, print_torrent
+from helpers import print_torrent
 
 __author__ = 'alexisgallepe'
 
@@ -29,7 +29,6 @@ class Torrent(object):
 
     def load_from_path(self, path):
         self.path = path
-        cleanup_torrent_download(torrent_file=self.path)
         
         with open(path, 'rb') as file:
             contents = bdecode(file)

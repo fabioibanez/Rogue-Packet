@@ -2,6 +2,7 @@
 # Author: Shounak Ray
 
 import pprint
+import re
 import shutil
 import threading
 import time
@@ -71,7 +72,6 @@ def cleanup_torrent_download(torrent_file: str) -> None:
     """
     Deletes all files in the current directory that match the pattern of the torrent file name.
     """
-    import re
     
     # Get the base name of the torrent file (without the .torrent extension)
     base_name = os.path.splitext(os.path.basename(torrent_file))[0]
@@ -80,12 +80,7 @@ def cleanup_torrent_download(torrent_file: str) -> None:
     for dirent in os.listdir('.'):
         if re.match(fr'^{re.escape(base_name)}.*', dirent) and os.path.isdir(dirent):
             print("\033[1;31m", end='')  # Bold red text
-            user_input = input(f"[UTILITY] Found a folder, perhaps for your previous download for your specified .torrent file.\n"
-                               f"[UTILITY] Do you want to delete {dirent}/? (y/n): ").lower()
+            print(f"[UTILITY] Deleting your previous .torrent folder download.")
             print("\033[0m", end='')  # Reset text formatting
-
-            if user_input == 'y':
-                shutil.rmtree(dirent)
-                print("\033[1;31m[UTILITY] Deleted {}\033[0m".format(dirent))
-            else:
-                print("\033[1;31m[UTILITY] Skipped {}\033[0m".format(dirent))
+            shutil.rmtree(dirent)
+            print("\033[1;31m[UTILITY] Deleted {}\033[0m".format(dirent))
