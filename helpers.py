@@ -2,7 +2,6 @@
 # Author: Shounak Ray
 
 import pprint
-import re
 import shutil
 import threading
 import time
@@ -12,6 +11,8 @@ import os
 import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.use('Agg')  # <- Use a non-GUI backend for thread safety
+# Disable matplotlib debug logging
+matplotlib.set_loglevel('WARNING')  # Only show warning and higher level messages
 import os
 
 
@@ -73,14 +74,13 @@ def cleanup_torrent_download(torrent_file: str) -> None:
     Deletes all files in the current directory that match the pattern of the torrent file name.
     """
     
-    # Get the base name of the torrent file (without the .torrent extension)
-    base_name = os.path.splitext(os.path.basename(torrent_file))[0]
-    
-    # Use a regex to find all folders in cwd that match the base name
-    for dirent in os.listdir('.'):
-        if re.match(fr'^{re.escape(base_name)}.*', dirent) and os.path.isdir(dirent):
-            print("\033[1;31m", end='')  # Bold red text
-            print(f"[UTILITY] Deleting your previous .torrent folder download.")
-            print("\033[0m", end='')  # Reset text formatting
-            shutil.rmtree(dirent)
-            print("\033[1;31m[UTILITY] Deleted {}\033[0m".format(dirent))
+    if os.path.exists(_target := os.path.splitext(os.path.basename(torrent_file))[0]):
+        shutil.rmtree(_target, ignore_errors=True)
+        print("\033[1;32m")  # Bold green text
+        print(f"[UTILITY] Deleted previous torrent folder @ '{_target}'.")
+        print("\033[0m")  # Reset text formatting
+    else:
+        print("\033[1;32m")
+        print(f"[UTILITY] No previous torrent folder found to delete @ '{_target}'.")
+        print("\033[0m")
+    time.sleep(1)
