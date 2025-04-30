@@ -1,6 +1,8 @@
+# torrent.py
+
 import math
 
-from helpers import print_torrent
+from helpers import cleanup_torrent_download, print_torrent
 
 __author__ = 'alexisgallepe'
 
@@ -13,6 +15,8 @@ import os
 
 class Torrent(object):
     def __init__(self):
+        self.path: str = ''
+        
         self.torrent_file = {}
         self.total_length: int = 0
         self.piece_length: int = 0
@@ -24,6 +28,9 @@ class Torrent(object):
         self.number_of_pieces: int = 0
 
     def load_from_path(self, path):
+        self.path = path
+        cleanup_torrent_download(torrent_file=self.path)
+        
         with open(path, 'rb') as file:
             contents = bdecode(file)
 

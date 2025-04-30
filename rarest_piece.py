@@ -1,3 +1,5 @@
+# rarest_piece.py
+
 import logging
 
 __author__ = 'alexisgallepe'

@@ -1,4 +1,7 @@
+# peer.py
+
 import time
+from typing import Optional
 
 __author__ = 'alexisgallepe'
 
@@ -9,6 +12,28 @@ from pubsub import pub
 import logging
 
 import message
+
+
+class PeerStats:
+    """Encapsulates peer statistics for proportional share matching"""
+    def __init__(self):
+        self.bytes_uploaded = 0
+        self.bytes_downloaded = 0
+        self.last_upload_time = 0.0
+        self.last_download_time = 0.0
+
+    def update_upload(self, bytes_sent: int) -> None:
+        self.bytes_uploaded += bytes_sent
+        self.last_upload_time = time.monotonic()
+
+    def update_download(self, bytes_received: int) -> None:
+        self.bytes_downloaded += bytes_received
+        self.last_download_time = time.monotonic()
+
+    def get_upload_ratio(self) -> float:
+        if self.bytes_downloaded == 0:
+            return float('inf')
+        return self.bytes_uploaded / self.bytes_downloaded
 
 
 class Peer(object):
@@ -28,6 +53,8 @@ class Peer(object):
             'peer_choking': True,
             'peer_interested': False,
         }
+        # Add stats tracking
+        self.stats = PeerStats()
 
     def __hash__(self):
         return "%s:%d" % (self.ip, self.port)
@@ -203,3 +230,12 @@ class Peer(object):
                     yield received_message
             except message.WrongMessageException as e:
                 logging.exception(e.__str__())
+
+    def update_upload_stats(self, bytes_sent: int) -> None:
+        self.stats.update_upload(bytes_sent)
+
+    def update_download_stats(self, bytes_received: int) -> None:
+        self.stats.update_download(bytes_received)
+
+    def get_upload_ratio(self) -> float:
+        return self.stats.get_upload_ratio()

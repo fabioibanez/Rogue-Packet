@@ -1,3 +1,5 @@
+# piece.py
+
 __author__ = 'alexisgallepe'
 
 import hashlib
