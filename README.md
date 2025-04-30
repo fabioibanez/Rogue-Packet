@@ -61,4 +61,10 @@ I wouldn't have gone that far without the help of
 [Bittorrent Unofficial Spec](https://wiki.theory.org/BitTorrentSpecification "Bittorrent Unofficial Spec"), so thank you.
 
 
+## TODO
+- [] Optimistic Unchoking, random optimistic unchoking 
+- [] Send peers the `HAVE` message + Testing
+- [] Non-optimistic unchoking, auction-strategy which is built into BitTorrent
+- [] Rarest Piece Selection, what is my current state of the world
+
 
