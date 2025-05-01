@@ -59,7 +59,6 @@ class Peer(object):
             'peer_choking': True,
             'peer_interested': False,
         }
-        # Add stats tracking
         self.stats = PeerStats()
 
     def __hash__(self):
@@ -80,6 +79,7 @@ class Peer(object):
 
     def send_to_peer(self, msg):
         try:
+            # TODO: rolling average for self.throughput
             self.socket.send(msg)
             self.last_call = time.time()
         except Exception as e:

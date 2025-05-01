@@ -58,6 +58,7 @@ class PeersManager(Thread):
     def peer_requests_piece(self, request: Optional[message.Request] = None, peer: Optional[peer.Peer] = None) -> None:
         if not request or not peer:
             logging.error("empty request/peer message")
+        if peer.am_choking():
             return
 
         piece_index: int = request.piece_index
@@ -68,6 +69,7 @@ class PeersManager(Thread):
         if block:
             piece: bytes = message.Piece(piece_index, block_offset, block_length, block).to_bytes()
             peer.send_to_peer(piece)
+            # TODO: keep track of the amount of data sent to each peer
             logging.info("Sent piece index {} to peer : {}".format(request.piece_index, peer.ip))
 
     def peers_bitfield(self, bitfield: Optional[Any] = None) -> None:
@@ -86,6 +88,11 @@ class PeersManager(Thread):
                 self.pieces_by_peer[i].peer_count = len(self.pieces_by_peer[i].peers)
 
     def get_random_peer_having_piece(self, index: int) -> Optional[peer.Peer]:
+        if bitfield[i] == 1 and peer not in self.pieces_by_peer[i][1] and self.pieces_by_peer[i][0]:
+            self.pieces_by_peer[i][1].append(peer)
+            self.pieces_by_peer[i][0] = len(self.pieces_by_peer[i][1])
+
+    def get_random_peer_having_piece(self, index):
         ready_peers = []
 
         for peer in self.peers:
