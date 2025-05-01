@@ -1,4 +1,7 @@
+# peer.py
+
 import time
+from typing import Optional
 
 __author__ = 'alexisgallepe'
 
@@ -10,6 +13,34 @@ import logging
 
 import message
 
+
+class PeerStats:
+    """Encapsulates peer statistics for proportional share matching"""
+    NO_DATA_SENTINEL: int = 0
+    
+    def __init__(self):
+        self.bytes_uploaded = PeerStats.NO_DATA_SENTINEL
+        self.bytes_downloaded = PeerStats.NO_DATA_SENTINEL
+        self.last_upload_time = PeerStats.NO_DATA_SENTINEL
+        self.last_download_time = PeerStats.NO_DATA_SENTINEL
+
+    def update_upload(self, bytes_sent: int) -> None:
+        self.bytes_uploaded += bytes_sent
+        self.last_upload_time = time.monotonic()
+
+    def update_download(self, bytes_received: int) -> None:
+        self.bytes_downloaded += bytes_received
+        self.last_download_time = time.monotonic()
+
+    def get_upload_ratio(self) -> float:
+        if self.bytes_downloaded == 0:
+            return float('inf')
+        return self.bytes_uploaded / self.bytes_downloaded
+
+
+##################
+##################
+##################
 
 class Peer(object):
     def __init__(self, number_of_pieces, ip, port=6881):
@@ -28,7 +59,7 @@ class Peer(object):
             'peer_choking': True,
             'peer_interested': False,
         }
-        self.throughput = 0
+        self.stats = PeerStats()
 
     def __hash__(self):
         return "%s:%d" % (self.ip, self.port)
@@ -138,19 +169,23 @@ class Peer(object):
 
         # pub.sendMessage('RarestPiece.updatePeersBitfield', bitfield=self.bit_field)
 
-    def handle_request(self, request):
+    def handle_request(self, request: message.Request):
         """
         :type request: message.Request
         """
         logging.debug('handle_request - %s' % self.ip)
         if self.is_interested() and self.is_unchoked():
             pub.sendMessage('PiecesManager.PeerRequestsPiece', request=request, peer=self)
+            # NOTE: by shounak, track upload when sending pieces
+            self.update_upload_stats(len(request.to_bytes()))
 
-    def handle_piece(self, message):
+    def handle_piece(self, message: message.Piece):
         """
         :type message: message.Piece
         """
         pub.sendMessage('PiecesManager.Piece', piece=(message.piece_index, message.block_offset, message.block))
+        # NOTE: by shounak, track download when receiving pieces
+        self.update_download_stats(len(message.block))
 
     def handle_cancel(self):
         logging.debug('handle_cancel - %s' % self.ip)
@@ -205,3 +240,12 @@ class Peer(object):
                     yield received_message
             except message.WrongMessageException as e:
                 logging.exception(e.__str__())
+
+    def update_upload_stats(self, bytes_sent: int) -> None:
+        self.stats.update_upload(bytes_sent)
+
+    def update_download_stats(self, bytes_received: int) -> None:
+        self.stats.update_download(bytes_received)
+
+    def get_upload_ratio(self) -> float:
+        return self.stats.get_upload_ratio()

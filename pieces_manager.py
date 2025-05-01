@@ -1,3 +1,5 @@
+# pieces_manager.py
+
 __author__ = 'alexisgallepe'
 
 import piece

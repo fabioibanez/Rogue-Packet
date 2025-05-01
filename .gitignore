@@ -5,7 +5,7 @@ torrents/
 
 .DS_Store
 pytorrent/
-
+*.png
 
 # Torrent files
 *.torrent

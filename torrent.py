@@ -1,3 +1,5 @@
+# torrent.py
+
 import math
 
 from helpers import print_torrent
@@ -23,7 +25,7 @@ class Torrent(object):
         self.file_names = []
         self.number_of_pieces: int = 0
 
-    def load_from_path(self, path):
+    def load_from_path(self, path):        
         with open(path, 'rb') as file:
             contents = bdecode(file)
 
