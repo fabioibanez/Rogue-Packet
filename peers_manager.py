@@ -292,6 +292,9 @@ class PeersManager(Thread):
         # Based on the above two lists, get all the peers that are eligible for optimistic unchoking
         eligible_for_optimistic_unchoking: List[peer.Peer] = list(set(_interested_in) - set(_already_unchoked))
         
+        if not eligible_for_optimistic_unchoking:
+            logging.info("[Optimistic unchoking] No eligible peers to unchoke")
+        
         # Randomly select one of the peers that are eligible for optimistic unchoking, to unchoke
         (lucky_peer := random.choice(eligible_for_optimistic_unchoking)).send_to_peer(message.UnChoke().to_bytes())
         logging.info("[Optimistic unchoking] Unchoked peer : %s" % lucky_peer.ip)
