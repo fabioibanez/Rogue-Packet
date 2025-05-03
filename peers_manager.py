@@ -294,6 +294,7 @@ class PeersManager(Thread):
         
         if not eligible_for_optimistic_unchoking:
             logging.info("[Optimistic unchoking] No eligible peers to unchoke")
+            return
         
         # Randomly select one of the peers that are eligible for optimistic unchoking, to unchoke
         (lucky_peer := random.choice(eligible_for_optimistic_unchoking)).send_to_peer(message.UnChoke().to_bytes())
