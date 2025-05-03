@@ -37,7 +37,7 @@ class PeerStats:
         if elapsed > 0:
             rate_now = bytes_received / elapsed  # bytes per second
 
-            # NOTE: calcualting alpha using 1 - exp(-deltaT / time_window)
+            # NOTE: calculating alpha using 1 - exp(-deltaT / time_window)
             alpha_eff = 1 - math.exp(-elapsed / self.time_window)
             self.download_rate_ema = (alpha_eff * rate_now +
                                       (1 - alpha_eff) * self.download_rate_ema)
