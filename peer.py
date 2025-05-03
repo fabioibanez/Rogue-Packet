@@ -10,33 +10,47 @@ import struct
 import bitstring
 from pubsub import pub
 import logging
-
 import message
-
+import time
+import math
 
 class PeerStats:
-    """Encapsulates peer statistics for proportional share matching"""
     NO_DATA_SENTINEL: int = 0
-    
-    def __init__(self):
-        self.bytes_uploaded = PeerStats.NO_DATA_SENTINEL
-        self.bytes_downloaded = PeerStats.NO_DATA_SENTINEL
-        self.last_upload_time = PeerStats.NO_DATA_SENTINEL
-        self.last_download_time = PeerStats.NO_DATA_SENTINEL
+
+    def __init__(self, time_window: float = 20.0):
+        self.bytes_uploaded = 0
+        self.bytes_downloaded = 0
+        self.last_upload_time = time.monotonic()
+        self.last_download_time = time.monotonic()
+        
+        self.download_rate_ema = 0.0
+        self.time_window = time_window  # in seconds
 
     def update_upload(self, bytes_sent: int) -> None:
         self.bytes_uploaded += bytes_sent
         self.last_upload_time = time.monotonic()
 
     def update_download(self, bytes_received: int) -> None:
+        now = time.monotonic()
+        # NOTE: delta T
+        elapsed = now - self.last_download_time
+        if elapsed > 0:
+            rate_now = bytes_received / elapsed  # bytes per second
+
+            # NOTE: calcualting alpha using 1 - exp(-deltaT / time_window)
+            alpha_eff = 1 - math.exp(-elapsed / self.time_window)
+            self.download_rate_ema = (alpha_eff * rate_now +
+                                      (1 - alpha_eff) * self.download_rate_ema)
         self.bytes_downloaded += bytes_received
-        self.last_download_time = time.monotonic()
+        self.last_download_time = now
 
     def get_upload_ratio(self) -> float:
         if self.bytes_downloaded == 0:
             return float('inf')
         return self.bytes_uploaded / self.bytes_downloaded
 
+    def get_download_rate(self) -> float:
+        return self.download_rate_ema
 
 ##################
 ##################
@@ -54,8 +68,10 @@ class Peer(object):
         self.number_of_pieces = number_of_pieces
         self.bit_field = bitstring.BitArray(number_of_pieces)
         self.state = {
+            # NOTE: i am choking them
             'am_choking': True,
             'am_interested': False,
+            # NOTE: they are choking us
             'peer_choking': True,
             'peer_interested': False,
         }

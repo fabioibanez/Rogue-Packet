@@ -16,7 +16,6 @@ from block import State
 from helpers import cleanup_torrent_download, plot_dirsize_overtime
 import os
 import threading
-import time
 
 __author__ = 'alexisgallepe'
 
@@ -32,6 +31,7 @@ import message
 
 SLEEP_FOR_NO_UNCHOKED: int = 1
 NO_PROGRESS_YET_SENTINEL: int = -1
+N_SECS: int = 10
 
 class Run(object):
     percentage_completed = NO_PROGRESS_YET_SENTINEL
@@ -98,6 +98,8 @@ class Run(object):
         # A peer is anyone we have an open TCP connection with
         # so this will ultimately `be many more connections than we actually download from 
         self.peers_manager.add_peers(peers_dict.values())
+        
+        prev_time = time.monotonic()
 
         # While we haven't finished downloading the file
         while not self.pieces_manager.all_pieces_completed():
@@ -121,6 +123,14 @@ class Run(object):
                 # and move on to the next piece
                 if self.pieces_manager.pieces[index].is_full:
                     continue
+                
+                
+                cur_time = time.monotonic()
+                
+                if (cur_time - prev_time) > N_SECS:
+                    # updates the unchoked peers state in the PeersManager and sends the unchoke message to the peers
+                    self.peers_manager._update_unchoked_regular_peers()        
+                    prev_time = cur_time
                 
                 # If we're here, we DON"T have all the blocks for this piece
                 # We need to ask a peer for a block of this piece
@@ -146,6 +156,7 @@ class Run(object):
 
                 piece_index, block_offset, block_length = data
                 piece_data = message.Request(piece_index, block_offset, block_length).to_bytes()
+                # NOTE: requesting a block from a peer
                 peer.send_to_peer(piece_data)
 
             self.display_progression()

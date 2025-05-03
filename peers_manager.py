@@ -1,5 +1,15 @@
 # peers_manager.py
 
+'''
+every 10 seconds we go through the list of peers and 
+select the top-k peers that have given us the most data
+(highest download rate to me) those are the people that 
+I unchoke
+
+requires you to send a message to the peer to unchoke
+keep track of choke/unchoke set
+'''
+
 import random
 from typing import List, Optional, Any, Type
 from dataclasses import dataclass
@@ -38,6 +48,10 @@ class PeersManager(Thread):
                  pieces_manager: pieces_manager.PiecesManager) -> None:
         Thread.__init__(self)
         self.peers: List[peer.Peer] = []  # List of connected peers
+
+        # NOTE: who has given me the most data, these are the regular peers that are unchoked
+        self.unchoked_regular_peers : List[peer.Peer] = []  # List of regular unchoked peers
+
         self.torrent: torrent.Torrent = torrent  # Torrent metadata
         self.pieces_manager: pieces_manager.PiecesManager = pieces_manager  # Manages pieces/blocks
         self.rarest_pieces: rarest_piece.RarestPieces = rarest_piece.RarestPieces(pieces_manager)
@@ -47,6 +61,7 @@ class PeersManager(Thread):
         # [peers] is a list of peers that have the piece
         self.pieces_by_peer: List[PiecePeerInfo] = [PiecePeerInfo(0, []) for _ in range(pieces_manager.number_of_pieces)]
         self.is_active: bool = True  # Controls the main thread loop
+        self.k_minus_1 = 3
 
         # Events
         pub.subscribe(self.peer_requests_piece, 'PeersManager.PeerRequestsPiece')
@@ -233,3 +248,31 @@ class PeersManager(Thread):
 
         else:
             logging.error("Unknown message")
+
+    def _update_unchoked_regular_peers(self) -> None:
+        # This is who is currently unchoked and we are sending data to
+        prev_unchoked = self.unchoked_regular_peers.copy()
+ 
+        # get the peers that we want to send data to
+        peers_sorted_by_download_rate = sorted(self.peers, key=lambda peer: peer.stats.download_rate_ema, reverse=True) 
+        self.unchoked_regular_peers = peers_sorted_by_download_rate[:self.k_minus_1] 
+        
+        # get peers who we WERE sending data to but are not in the new list
+        to_choke = [peer for peer in prev_unchoked if peer not in self.unchoked_regular_peers]
+        
+        # choke those that are not in the new list
+        for peer in to_choke:
+            # if we are unchoking them, we choke them
+            if not peer.am_choking():
+                peer.send_to_peer(message.Choke().to_bytes())
+                peer.state['am_interested'] = False
+                logging.info("Choked peer : %s" % peer.ip)
+        
+        # unchoke those that are in the new list
+        for peer in self.unchoked_regular_peers:
+            # if we are choking them, we unchoke them
+            if peer.am_choking():
+                peer.send_to_peer(message.UnChoke().to_bytes())
+                peer.state['am_interested'] = True
+                logging.info("Unchoked peer : %s" % peer.ip)
+                
