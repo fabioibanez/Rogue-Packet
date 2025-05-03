@@ -51,6 +51,8 @@ class PeersManager(Thread):
 
         # NOTE: who has given me the most data, these are the regular peers that are unchoked
         self.unchoked_regular_peers : List[peer.Peer] = []  # List of regular unchoked peers
+        # NOTE: this is the peer that we unchoke optimistically
+        self.unchoked_optimistic_peer: Optional[peer.Peer] = None
 
         self.torrent: torrent.Torrent = torrent  # Torrent metadata
         self.pieces_manager: pieces_manager.PiecesManager = pieces_manager  # Manages pieces/blocks
@@ -255,6 +257,7 @@ class PeersManager(Thread):
  
         # get the peers that we want to send data to
         peers_sorted_by_download_rate = sorted(self.peers, key=lambda peer: peer.stats.download_rate_ema, reverse=True) 
+        peers_sorted_by_download_rate = list(filter(lambda peer: peer.am_interested(), peers_sorted_by_download_rate))
         self.unchoked_regular_peers = peers_sorted_by_download_rate[:self.k_minus_1] 
         
         # get peers who we WERE sending data to but are not in the new list
@@ -275,4 +278,23 @@ class PeersManager(Thread):
                 peer.send_to_peer(message.UnChoke().to_bytes())
                 peer.state['am_interested'] = True
                 logging.info("Unchoked peer : %s" % peer.ip)
-                
+    
+    def _update_unchoked_optimistic_peers(self) -> None:
+        # Unchoke the peer that was lucky the last time
+        if self.unchoked_optimistic_peer is not None:
+            self.unchoked_optimistic_peer.send_to_peer(message.Choke().to_bytes())
+            logging.info("[Optimistic unchoking] Choke the old peer : %s" % self.unchoked_optimistic_peer.ip)
+        
+        # Get all the peers that we're interested in
+        _interested_in: List[peer.Peer] = list(filter(lambda peer: peer.am_interested(), self.peers))
+        # Get all the peers that we've already unchoked
+        _already_unchoked: List[peer.Peer] = self.unchoked_regular_peers
+        # Based on the above two lists, get all the peers that are eligible for optimistic unchoking
+        eligible_for_optimistic_unchoking: List[peer.Peer] = list(set(_interested_in) - set(_already_unchoked))
+        
+        if not eligible_for_optimistic_unchoking:
+            logging.info("[Optimistic unchoking] No eligible peers to unchoke")
+        
+        # Randomly select one of the peers that are eligible for optimistic unchoking, to unchoke
+        (lucky_peer := random.choice(eligible_for_optimistic_unchoking)).send_to_peer(message.UnChoke().to_bytes())
+        logging.info("[Optimistic unchoking] Unchoked peer : %s" % lucky_peer.ip)

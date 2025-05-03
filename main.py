@@ -31,7 +31,8 @@ import message
 
 SLEEP_FOR_NO_UNCHOKED: int = 1
 NO_PROGRESS_YET_SENTINEL: int = -1
-N_SECS: int = 10
+N_SECS_REGULAR_UNCHOKING: int = 10
+N_SECS_OPTIMISTIC_UNCHOKING: int = 30
 
 class Run(object):
     percentage_completed = NO_PROGRESS_YET_SENTINEL
@@ -99,7 +100,8 @@ class Run(object):
         # so this will ultimately `be many more connections than we actually download from 
         self.peers_manager.add_peers(peers_dict.values())
         
-        prev_time = time.monotonic()
+        prev_time_regular_unchoking = time.monotonic()
+        prev_time_optimistic_unchoking = time.monotonic()
 
         # While we haven't finished downloading the file
         while not self.pieces_manager.all_pieces_completed():
@@ -124,13 +126,17 @@ class Run(object):
                 if self.pieces_manager.pieces[index].is_full:
                     continue
                 
-                
-                cur_time = time.monotonic()
-                
-                if (cur_time - prev_time) > N_SECS:
-                    # updates the unchoked peers state in the PeersManager and sends the unchoke message to the peers
+                # updates the unchoked peers state in the PeersManager and sends the unchoke message to the peers
+                DELTA_REGULAR_UNCHOKING: float = time.monotonic() - prev_time_regular_unchoking
+                if DELTA_REGULAR_UNCHOKING >= N_SECS_REGULAR_UNCHOKING:
                     self.peers_manager._update_unchoked_regular_peers()        
-                    prev_time = cur_time
+                    prev_time_regular_unchoking = time.monotonic()
+                
+                # updates the optimistic unchoked peers state in the PeersManager and sends the unchoke message to the peers
+                DELTA_OPTIMISTIC_UNCHOKING: float = time.monotonic() - prev_time_optimistic_unchoking
+                if DELTA_OPTIMISTIC_UNCHOKING >= N_SECS_OPTIMISTIC_UNCHOKING:
+                    self.peers_manager._update_unchoked_optimistic_peers()
+                    prev_time_optimistic_unchoking = time.monotonic()
                 
                 # If we're here, we DON"T have all the blocks for this piece
                 # We need to ask a peer for a block of this piece
