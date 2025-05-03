@@ -87,11 +87,6 @@ class PeersManager(Thread):
                 self.pieces_by_peer[i].peers.append(peer)
                 self.pieces_by_peer[i].peer_count = len(self.pieces_by_peer[i].peers)
 
-    def get_random_peer_having_piece(self, index: int) -> Optional[peer.Peer]:
-        if bitfield[i] == 1 and peer not in self.pieces_by_peer[i][1] and self.pieces_by_peer[i][0]:
-            self.pieces_by_peer[i][1].append(peer)
-            self.pieces_by_peer[i][0] = len(self.pieces_by_peer[i][1])
-
     def get_random_peer_having_piece(self, index):
         ready_peers = []
 
