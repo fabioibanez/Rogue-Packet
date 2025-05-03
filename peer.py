@@ -78,7 +78,8 @@ class Peer(object):
         self.stats = PeerStats()
 
     def __hash__(self):
-        return "%s:%d" % (self.ip, self.port)
+        # Changed to return an integer hash value for proper optimistic unchoking
+        return hash((self.ip, self.port))
 
     def connect(self):
         try:

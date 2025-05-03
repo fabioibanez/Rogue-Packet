@@ -281,12 +281,7 @@ class PeersManager(Thread):
             logging.info("\033[1;35m[Optimistic unchoking] No interested peers\033[0m")
             return
         _already_unchoked: List[peer.Peer] = self.unchoked_regular_peers
-        try:
-            eligible_for_optimistic_unchoking: List[peer.Peer] = list(set(_interested_in) - set(_already_unchoked))
-        except Exception as e:
-            print(f"Interested in: {_interested_in}")
-            print(f"Already unchoked: {_already_unchoked}")
-            raise e
+        eligible_for_optimistic_unchoking: List[peer.Peer] = list(set(_interested_in) - set(_already_unchoked))
         logging.info("\033[1;35m[Optimistic unchoking] Eligible peers: %s\033[0m", [p.ip for p in eligible_for_optimistic_unchoking])
         if not eligible_for_optimistic_unchoking:
             logging.info("\033[1;35m[Optimistic unchoking] No eligible peers to unchoke\033[0m")
