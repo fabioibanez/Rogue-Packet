@@ -67,4 +67,13 @@ I wouldn't have gone that far without the help of
 - [] Non-optimistic unchoking, auction-strategy which is built into BitTorrent
 - [] Rarest Piece Selection, what is my current state of the world
 
+### Implementation Notes
+
+#### Rarest First Strategy
+
+The existing code bulk-sends block requests to interesting peers in a while loop. It guards against overloading the network by not sending more than one request to a peer in a 200ms window, however, this can still result in many more than the typical 10-15 outstanding requests that you would see in a production BitTorrent client.
+
+We can implement rarest-first piece selection by changing the iteration order for requests: rather than iterate from front-to-back (the behaviour of the existing code) we iterate over pieces in order of rarest-first. This order can be derived by looking at the sum of all connected peers bifields.
+
+To fix the outstanding requests issue, we can keep track of how many outstanding requests have been sent to each peer. When sending a new request, if the sum of all requests across all peers is greater than a threshold value (e.g. 15), we don't send the request. This behaviour can simply be overlayed over the piece request loop.
 

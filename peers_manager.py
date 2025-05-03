@@ -1,8 +1,7 @@
 # peers_manager.py
 
 import random
-from typing import List, Optional, Any, Type
-from dataclasses import dataclass
+from typing import Generator, List, Optional, TypeAlias
 
 import pieces_manager
 import torrent
@@ -12,22 +11,23 @@ __author__ = 'alexisgallepe'
 import select
 from threading import Thread
 from pubsub import pub
-import rarest_piece
 import logging
 import message
 import peer
 import errno
 import socket
 
+from bitstring import BitArray
+
 ##################
 ##################
 ##################
 
-@dataclass
-class PiecePeerInfo:
-    """Information about which peers have a specific piece"""
-    peer_count: int         # Number of peers that have this piece
-    peers: List[peer.Peer]  # List of peers that have this piece
+PeersByPiece: TypeAlias = List[List[peer.Peer]]
+"""
+Each element of this list is a list of peers who are known to have the piece with that index.
+For example, `peersByPiece[0]` is all the peers who have piece 0
+"""
 
 ##################
 ##################
@@ -40,18 +40,16 @@ class PeersManager(Thread):
         self.peers: List[peer.Peer] = []  # List of connected peers
         self.torrent: torrent.Torrent = torrent  # Torrent metadata
         self.pieces_manager: pieces_manager.PiecesManager = pieces_manager  # Manages pieces/blocks
-        self.rarest_pieces: rarest_piece.RarestPieces = rarest_piece.RarestPieces(pieces_manager)
         
         # self.pieces_by_peer is a list where each element is [count, [peers]]:
         # count is the number of peers that have the piece (this starts as)
         # [peers] is a list of peers that have the piece
-        self.pieces_by_peer: List[PiecePeerInfo] = [PiecePeerInfo(0, []) for _ in range(pieces_manager.number_of_pieces)]
+        self.peers_by_piece: PeersByPiece = [[] for _ in range(pieces_manager.number_of_pieces)]
         self.is_active: bool = True  # Controls the main thread loop
 
         # Events
         pub.subscribe(self.peer_requests_piece, 'PeersManager.PeerRequestsPiece')
-        # NOTE: This event is not actually used in their implementation
-        pub.subscribe(self.peers_bitfield, 'PeersManager.updatePeersBitfield')
+        pub.subscribe(self.update_peers_bitfield, 'PeersManager.UpdatePeersBitfield')
 
     # NOTE: I'm not going to tell peers out of my own volition what pieces I have,
     # but I will respond to their requests for pieces.
@@ -72,20 +70,41 @@ class PeersManager(Thread):
             # TODO: keep track of the amount of data sent to each peer
             logging.info("Sent piece index {} to peer : {}".format(request.piece_index, peer.ip))
 
-    def peers_bitfield(self, bitfield: Optional[Any] = None) -> None:
-        for i in range(len(self.pieces_by_peer)):
-            # Check if the peer has this piece (bitfield[i] == 1)
-            peer_has_piece: bool = bitfield[i] == 1
-            
-            # Check if this peer is not already in our list of peers that have this piece
-            peer_not_tracked: bool = peer not in self.pieces_by_peer[i].peers
-            
-            # Check if we're already tracking peers for this piece (count > 0)
-            piece_has_peers: bool = self.pieces_by_peer[i].peer_count > 0
-            
-            if peer_has_piece and peer_not_tracked and piece_has_peers:
-                self.pieces_by_peer[i].peers.append(peer)
-                self.pieces_by_peer[i].peer_count = len(self.pieces_by_peer[i].peers)
+    def update_peers_bitfield(
+        self, 
+        peer: peer.Peer, 
+        piece_index: Optional[int] = None, 
+        bit_field: Optional[BitArray] = None
+    ) -> None:
+        """
+        Called when a peer updates their bit field, either via a `bitfield` or `have` message.
+
+        @param peer             The peer whose bitfield should be updated
+        @param piece_index      Optionally, the index of the piece that the peer received
+        @param bit_field        Optionally, the bit_field of the peer
+        """
+
+        if piece_index is not None:
+            peers_list = self.peers_by_piece[piece_index]
+            if peer not in peers_list:
+                peers_list.append(peer)
+        
+        if bit_field is not None:
+            for piece_index in range(len(bit_field)):
+                if bit_field[piece_index] == 1:
+                    self.update_peers_bitfield(peer, piece_index=piece_index)
+
+    def enumerate_piece_indices_rarest_first(self) -> Generator[int]:
+        """
+        Enumerates the indices of pieces in rarest first order.
+
+        This will return pieces which no known peers have.
+        In other words, piece indices whose piece has a peer count of 0 will be returned.
+        """
+        peer_counts = [[idx, len(peers)] for idx, peers in enumerate(self.peers_by_piece)]
+        peer_counts = sorted(peer_counts, key=lambda elem: elem[1])
+        return [idx for idx, _ in peer_counts]
+
 
     def get_random_peer_having_piece(self, index):
         ready_peers = []

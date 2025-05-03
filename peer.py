@@ -138,6 +138,9 @@ class Peer(object):
     def handle_have(self, have):
         """
         :type have: message.Have
+
+        This method is called when a remote peer sends a message indicating that they have a
+        particular piece.
         """
         logging.debug('handle_have - ip: %s - piece: %s' % (self.ip, have.piece_index))
         self.bit_field[have.piece_index] = True
@@ -153,7 +156,7 @@ class Peer(object):
             self.send_to_peer(interested)
             self.state['am_interested'] = True
 
-        # pub.sendMessage('RarestPiece.updatePeersBitfield', bitfield=self.bit_field)
+        pub.sendMessage('PeersManager.UpdatePeersBitfield', peer=self, piece_index=have.piece_index)
 
     def handle_bitfield(self, bitfield):
         """
@@ -167,7 +170,7 @@ class Peer(object):
             self.send_to_peer(interested)
             self.state['am_interested'] = True
 
-        # pub.sendMessage('RarestPiece.updatePeersBitfield', bitfield=self.bit_field)
+        pub.sendMessage('PeersManager.UpdatePeersBitfield', peer=self, bit_field=self.bit_field)
 
     def handle_request(self, request: message.Request):
         """
