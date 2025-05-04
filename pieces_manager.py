@@ -29,6 +29,7 @@ class PiecesManager(object):
 
     def update_bitfield(self, piece_index):
         self.bitfield[piece_index] = 1
+        pub.sendMessage('PeersManager.BroadcastHave', piece_index=piece_index)
 
     def receive_block_piece(self, piece):
         piece_index, piece_offset, piece_data = piece
