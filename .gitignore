@@ -2,6 +2,7 @@
 ### CUSTOM ADDED BY ROGUE PACKET PROJECTS ###
 torrents/
 *iso
+*.csv
 
 .DS_Store
 pytorrent/

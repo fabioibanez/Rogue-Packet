@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 import pieces_manager
 import torrent
+import peer_choking_logger
 
 __author__ = 'alexisgallepe'
 
@@ -64,6 +65,9 @@ class PeersManager(Thread):
         self.pieces_by_peer: List[PiecePeerInfo] = [PiecePeerInfo(0, []) for _ in range(pieces_manager.number_of_pieces)]
         self.is_active: bool = True  # Controls the main thread loop
         self.k_minus_1 = 3
+
+        # Initialize the choking logger
+        self.choking_logger = peer_choking_logger.PeerChokingLogger()
 
         # Events
         pub.subscribe(self.peer_requests_piece, 'PeersManager.PeerRequestsPiece')
@@ -266,16 +270,19 @@ class PeersManager(Thread):
                 peer.send_to_peer(message.Choke().to_bytes())
                 peer.state['am_interested'] = False
                 logging.info("\033[1;36mChoked peer : %s\033[0m" % peer.ip)
+                self.choking_logger.log_regular_choke(peer)
         for peer in self.unchoked_regular_peers:
             if peer.am_choking():
                 peer.send_to_peer(message.UnChoke().to_bytes())
                 peer.state['am_interested'] = True
                 logging.info("\033[1;36mUnchoked peer : %s\033[0m" % peer.ip)
+                self.choking_logger.log_regular_unchoke(peer)
     
     def _update_unchoked_optimistic_peers(self) -> None:
         if self.unchoked_optimistic_peer is not None:
             self.unchoked_optimistic_peer.send_to_peer(message.Choke().to_bytes())
             logging.info("\033[1;35m[Optimistic unchoking] Choke the old peer : %s\033[0m" % self.unchoked_optimistic_peer.ip)
+            self.choking_logger.log_optimistic_choke(self.unchoked_optimistic_peer)
         _interested_in: List[peer.Peer] = list(filter(lambda peer: peer.am_interested(), self.peers))
         if not _interested_in:
             logging.info("\033[1;35m[Optimistic unchoking] No interested peers\033[0m")
@@ -290,3 +297,4 @@ class PeersManager(Thread):
         lucky_peer.send_to_peer(message.UnChoke().to_bytes())
         self.unchoked_optimistic_peer = lucky_peer
         logging.info("\033[1;35m[Optimistic unchoking] Unchoked peer : %s\033[0m" % lucky_peer.ip)
+        self.choking_logger.log_optimistic_unchoke(lucky_peer)
