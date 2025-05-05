@@ -70,6 +70,7 @@ class Piece(object):
         self.raw_data = data
         self._write_piece_on_disk()
         pub.sendMessage('PiecesManager.PieceCompleted', piece_index=self.piece_index)
+        pub.sendMessage('PeersManager.BroadcastHave', piece_index=self.piece_index)
 
         return True
 
