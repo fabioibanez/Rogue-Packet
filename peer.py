@@ -30,6 +30,7 @@ class PeerStats:
         self.last_upload_time = time.monotonic()
 
     def update_download(self, bytes_received: int) -> None:
+        self.bytes_downloaded += bytes_received
         self.dictionary_of_bytes_received_with_time[time.monotonic()] = bytes_received
 
     def calculate_download_rate(self) -> float:
@@ -44,7 +45,8 @@ class PeerStats:
             w = math.exp(-dt / self.time_window)
             weighted_sum += x * w
             total_weight += w
-        return weighted_sum / total_weight
+        # this + 1 is a hack that adds an artificial datapoint now
+        return weighted_sum / (total_weight + 1)
 
     def get_upload_ratio(self) -> float:
         if self.bytes_downloaded == 0:
