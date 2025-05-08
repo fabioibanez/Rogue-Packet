@@ -15,8 +15,6 @@ import time
 import math
 
 class PeerStats:
-    NO_DATA_SENTINEL: int = 0
-
     def __init__(self, time_window: float = 20.0):
         self.bytes_uploaded = 0
         self.bytes_downloaded = 0
