@@ -25,24 +25,28 @@ class PeerStats:
         
         self.download_rate_ema = 0.0
         self.time_window = time_window  # in seconds
+        self.dictionary_of_bytes_received_with_time: dict[float, int] = {}
 
     def update_upload(self, bytes_sent: int) -> None:
         self.bytes_uploaded += bytes_sent
         self.last_upload_time = time.monotonic()
 
     def update_download(self, bytes_received: int) -> None:
-        now = time.monotonic()
-        # NOTE: delta T
-        elapsed = now - self.last_download_time
-        if elapsed > 0:
-            rate_now = bytes_received / elapsed  # bytes per second
+        self.dictionary_of_bytes_received_with_time[time.monotonic()] = bytes_received
 
-            # NOTE: calculating alpha using 1 - exp(-deltaT / time_window)
-            alpha_eff = 1 - math.exp(-elapsed / self.time_window)
-            self.download_rate_ema = (alpha_eff * rate_now +
-                                      (1 - alpha_eff) * self.download_rate_ema)
-        self.bytes_downloaded += bytes_received
-        self.last_download_time = now
+    def calculate_download_rate(self) -> float:
+        '''
+        This will be called when deciding which peer to unchoke
+        '''
+        now = time.monotonic()
+        weighted_sum = 0
+        total_weight = 0
+        for t, x in self.dictionary_of_bytes_received_with_time.items():
+            dt = now - t
+            w = math.exp(-dt / self.time_window)
+            weighted_sum += x * w
+            total_weight += w
+        return weighted_sum / total_weight
 
     def get_upload_ratio(self) -> float:
         if self.bytes_downloaded == 0:

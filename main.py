@@ -104,7 +104,7 @@ class Run(object):
         prev_time_optimistic_unchoking = time.monotonic()
 
         # While we haven't finished downloading the file
-        while not self.pieces_manager.all_pieces_completed():
+        while not self.pieces_manager.all_pieces_completed(): 
             # if there's no one can give us data then we wait and infinitely loop
             if not self.peers_manager.has_unchoked_peers():
                 time.sleep(SLEEP_FOR_NO_UNCHOKED)
