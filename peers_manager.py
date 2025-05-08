@@ -257,7 +257,7 @@ class PeersManager(Thread):
 
     def _update_unchoked_regular_peers(self) -> None:
         prev_unchoked = self.unchoked_regular_peers.copy()
-        peers_sorted_by_download_rate = sorted(self.peers, key=lambda peer: peer.stats.download_rate_ema, reverse=True) 
+        peers_sorted_by_download_rate = sorted(self.peers, key=lambda peer: peer.stats.calculate_download_rate(), reverse=True) 
         peers_sorted_by_download_rate = list(filter(lambda peer: peer.am_interested(), peers_sorted_by_download_rate))
         logging.info("\033[1;36m[Unchoke] Sorted peers by download_rate_ema: %s\033[0m", [(p.ip, p.stats.download_rate_ema) for p in peers_sorted_by_download_rate])
         self.unchoked_regular_peers = peers_sorted_by_download_rate[:self.k_minus_1] 
