@@ -388,7 +388,7 @@ class Have(Message):
         self.piece_index = piece_index
 
     def to_bytes(self):
-        pack(">IBI", self.payload_length, self.message_id, self.piece_index)
+        return pack(">IBI", self.payload_length, self.message_id, self.piece_index)
 
     @classmethod
     def from_bytes(cls, payload):
