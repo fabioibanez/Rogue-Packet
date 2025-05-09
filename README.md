@@ -62,9 +62,9 @@ I wouldn't have gone that far without the help of
 
 
 ## TODO
-- [] Optimistic Unchoking, random optimistic unchoking 
-- [] Send peers the `HAVE` message + Testing
-- [] Non-optimistic unchoking, auction-strategy which is built into BitTorrent
-- [] Rarest Piece Selection, what is my current state of the world
+- [Done-Shounak] Optimistic Unchoking, random optimistic unchoking 
+- [Done-Yousef] Send peers the `HAVE` message + Testing (testing left)
+- [Done-Fabio] Non-optimistic unchoking, auction-strategy which is built into BitTorrent
+- [Done-Jacob] Rarest Piece Selection, what is my current state of the world
 
 
