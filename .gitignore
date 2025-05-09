@@ -4,6 +4,7 @@ torrents/
 *iso
 *.csv
 
+*.csv
 .DS_Store
 pytorrent/
 *.png
