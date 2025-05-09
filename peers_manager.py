@@ -41,9 +41,6 @@ class PeersManager(Thread):
         self.torrent: torrent.Torrent = torrent  # Torrent metadata
         self.pieces_manager: pieces_manager.PiecesManager = pieces_manager  # Manages pieces/blocks
         
-        # self.pieces_by_peer is a list where each element is [count, [peers]]:
-        # count is the number of peers that have the piece (this starts as)
-        # [peers] is a list of peers that have the piece
         self.peers_by_piece: PeersByPiece = [[] for _ in range(pieces_manager.number_of_pieces)]
         self.is_active: bool = True  # Controls the main thread loop
 
