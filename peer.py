@@ -21,7 +21,6 @@ class PeerStats:
         self.last_upload_time = time.monotonic()
         self.last_download_time = time.monotonic()
         
-        self.download_rate_ema = 0.0
         self.time_window = time_window  # in seconds
         self.dictionary_of_bytes_received_with_time: dict[float, int] = {}
 
