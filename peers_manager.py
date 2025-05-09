@@ -94,7 +94,7 @@ class PeersManager(Thread):
                 if bit_field[piece_index] == 1:
                     self.update_peers_bitfield(peer, piece_index=piece_index)
 
-    def enumerate_piece_indices_rarest_first(self) -> Generator[int]:
+    def enumerate_piece_indices_rarest_first(self) -> List[int]:
         """
         Enumerates the indices of pieces in rarest first order.
 
