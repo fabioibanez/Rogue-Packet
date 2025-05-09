@@ -74,6 +74,20 @@ class PeersManager(Thread):
         # NOTE: This event is not actually used in their implementation
         pub.subscribe(self.peers_bitfield, 'PeersManager.updatePeersBitfield')
 
+        # added for HAVE message sending
+        pub.subscribe(self.broadcast_have, 'PeersManager.BroadcastHave')
+
+    def broadcast_have(self, piece_index: int) -> None:
+        have_message = message.Have(piece_index).to_bytes()
+
+        # Send the HAVE message to all peers, including those that are not interested
+        # maybe they will be interested later
+        for peer in self.peers:
+            if peer.healthy:
+                peer.send_to_peer(have_message)
+                logging.info("Sent HAVE message for piece index {} to peer: {}".format(piece_index, peer.ip))
+
+
     # NOTE: I'm not going to tell peers out of my own volition what pieces I have,
     # but I will respond to their requests for pieces.
     def peer_requests_piece(self, request: Optional[message.Request] = None, peer: Optional[peer.Peer] = None) -> None:
