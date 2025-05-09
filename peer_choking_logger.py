@@ -149,7 +149,7 @@ class PeerChokingLogger:
                 datetime.now().isoformat(),
                 event_type,
                 peer.ip,
-                peer.stats.download_rate_ema,
+                peer.stats.calculate_download_rate(),
                 peer.am_interested(),
                 stats['regular_unchokes'],
                 stats['optimistic_unchokes'],

@@ -287,7 +287,7 @@ class PeersManager(Thread):
         prev_unchoked = self.unchoked_regular_peers.copy()
         peers_sorted_by_download_rate = sorted(self.peers, key=lambda peer: peer.stats.calculate_download_rate(), reverse=True) 
         peers_sorted_by_download_rate = list(filter(lambda peer: peer.am_interested(), peers_sorted_by_download_rate))
-        logging.info("\033[1;36m[Unchoke] Sorted peers by download_rate_ema: %s\033[0m", [(p.ip, p.stats.download_rate_ema) for p in peers_sorted_by_download_rate])
+        logging.info("\033[1;36m[Unchoke] Sorted peers by download_rate_ema: %s\033[0m", [(p.ip, p.stats.calculate_download_rate()) for p in peers_sorted_by_download_rate])
         self.unchoked_regular_peers = peers_sorted_by_download_rate[:self.k_minus_1] 
         logging.info("\033[1;36m[Unchoke] New unchoked_regular_peers: %s\033[0m", [p.ip for p in self.unchoked_regular_peers])
         logging.info("\033[1;36m[Unchoke] Previous unchoked_regular_peers: %s\033[0m", [p.ip for p in prev_unchoked])
