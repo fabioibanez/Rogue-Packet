@@ -10,19 +10,19 @@ import struct
 import bitstring
 from pubsub import pub
 import logging
-
 import message
-
+import time
+import math
 
 class PeerStats:
-    """Encapsulates peer statistics for proportional share matching"""
-    NO_DATA_SENTINEL: int = 0
-    
-    def __init__(self):
-        self.bytes_uploaded = PeerStats.NO_DATA_SENTINEL
-        self.bytes_downloaded = PeerStats.NO_DATA_SENTINEL
-        self.last_upload_time = PeerStats.NO_DATA_SENTINEL
-        self.last_download_time = PeerStats.NO_DATA_SENTINEL
+    def __init__(self, time_window: float = 20.0):
+        self.bytes_uploaded = 0
+        self.bytes_downloaded = 0
+        self.last_upload_time = time.monotonic()
+        self.last_download_time = time.monotonic()
+        
+        self.time_window = time_window  # in seconds
+        self.dictionary_of_bytes_received_with_time: dict[float, int] = {}
 
     def update_upload(self, bytes_sent: int) -> None:
         self.bytes_uploaded += bytes_sent
@@ -30,13 +30,27 @@ class PeerStats:
 
     def update_download(self, bytes_received: int) -> None:
         self.bytes_downloaded += bytes_received
-        self.last_download_time = time.monotonic()
+        self.dictionary_of_bytes_received_with_time[time.monotonic()] = bytes_received
+
+    def calculate_download_rate(self) -> float:
+        '''
+        This will be called when deciding which peer to unchoke
+        '''
+        now = time.monotonic()
+        weighted_sum = 0
+        total_weight = 0
+        for t, x in self.dictionary_of_bytes_received_with_time.items():
+            dt = now - t
+            w = math.exp(-dt / self.time_window)
+            weighted_sum += x * w
+            total_weight += w
+        # this + 1 is a hack that adds an artificial datapoint now
+        return weighted_sum / (total_weight + 1)
 
     def get_upload_ratio(self) -> float:
         if self.bytes_downloaded == 0:
             return float('inf')
         return self.bytes_uploaded / self.bytes_downloaded
-
 
 ##################
 ##################
@@ -54,15 +68,18 @@ class Peer(object):
         self.number_of_pieces = number_of_pieces
         self.bit_field = bitstring.BitArray(number_of_pieces)
         self.state = {
+            # NOTE: i am choking them
             'am_choking': True,
             'am_interested': False,
+            # NOTE: they are choking us
             'peer_choking': True,
             'peer_interested': False,
         }
         self.stats = PeerStats()
 
     def __hash__(self):
-        return "%s:%d" % (self.ip, self.port)
+        # Changed to return an integer hash value for proper optimistic unchoking
+        return hash((self.ip, self.port))
 
     def connect(self):
         try:

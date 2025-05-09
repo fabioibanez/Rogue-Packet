@@ -16,7 +16,6 @@ from block import State
 from helpers import cleanup_torrent_download, plot_dirsize_overtime
 import os
 import threading
-import time
 
 __author__ = 'alexisgallepe'
 
@@ -32,6 +31,8 @@ import message
 
 SLEEP_FOR_NO_UNCHOKED: int = 1
 NO_PROGRESS_YET_SENTINEL: int = -1
+n_secs_regular_unchoking: int = 10
+n_secs_optimistic_unchoking: int = 30
 
 class Run(object):
     percentage_completed = NO_PROGRESS_YET_SENTINEL
@@ -98,9 +99,12 @@ class Run(object):
         # A peer is anyone we have an open TCP connection with
         # so this will ultimately `be many more connections than we actually download from 
         self.peers_manager.add_peers(peers_dict.values())
+        
+        prev_time_regular_unchoking = time.monotonic()
+        prev_time_optimistic_unchoking = time.monotonic()
 
         # While we haven't finished downloading the file
-        while not self.pieces_manager.all_pieces_completed():
+        while not self.pieces_manager.all_pieces_completed(): 
             # if there's no one can give us data then we wait and infinitely loop
             if not self.peers_manager.has_unchoked_peers():
                 time.sleep(SLEEP_FOR_NO_UNCHOKED)
@@ -121,6 +125,18 @@ class Run(object):
                 # and move on to the next piece
                 if self.pieces_manager.pieces[index].is_full:
                     continue
+                
+                # updates the unchoked peers state in the PeersManager and sends the unchoke message to the peers
+                delta_regular_unchoking: float = time.monotonic() - prev_time_regular_unchoking
+                if delta_regular_unchoking >= n_secs_regular_unchoking:
+                    self.peers_manager._update_unchoked_regular_peers()        
+                    prev_time_regular_unchoking = time.monotonic()
+                
+                # updates the optimistic unchoked peers state in the PeersManager and sends the unchoke message to the peers
+                delta_optimistic_unchoking: float = time.monotonic() - prev_time_optimistic_unchoking
+                if delta_optimistic_unchoking >= n_secs_optimistic_unchoking:
+                    self.peers_manager._update_unchoked_optimistic_peers()
+                    prev_time_optimistic_unchoking = time.monotonic()
                 
                 # If we're here, we DON"T have all the blocks for this piece
                 # We need to ask a peer for a block of this piece
@@ -146,6 +162,7 @@ class Run(object):
 
                 piece_index, block_offset, block_length = data
                 piece_data = message.Request(piece_index, block_offset, block_length).to_bytes()
+                # NOTE: requesting a block from a peer
                 peer.send_to_peer(piece_data)
 
             self.display_progression()
