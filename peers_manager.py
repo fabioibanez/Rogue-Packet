@@ -11,7 +11,7 @@ keep track of choke/unchoke set
 '''
 
 import random
-from typing import List, Optional
+from typing import List, Optional, TypeAlias
 
 import pieces_manager
 import torrent
