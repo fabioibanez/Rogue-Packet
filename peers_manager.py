@@ -98,9 +98,7 @@ class PeersManager(Thread):
         This will return pieces which no known peers have.
         In other words, piece indices whose piece has a peer count of 0 will be returned.
         """
-        peer_counts = [[idx, len(peers)] for idx, peers in enumerate(self.peers_by_piece)]
-        peer_counts = sorted(peer_counts, key=lambda elem: elem[1])
-        return [idx for idx, _ in peer_counts]
+        return sorted(range(len(self.peers_by_piece)), key=lambda idx: len(self.peers_by_piece[idx]))
 
 
     def get_random_peer_having_piece(self, index):
