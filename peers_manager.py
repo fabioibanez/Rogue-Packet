@@ -63,12 +63,8 @@ class PeersManager(Thread):
         # maybe they will be interested later
         for peer in self.peers:
             if peer.healthy:
-                try:
-                    peer.send_to_peer(have_message)
-                    logging.info("Sent HAVE message for piece index {} to peer: {}".format(piece_index, peer.ip))
-                except Exception as e:
-                    logging.error("Failed to send HAVE message to peer {}: {}".format(peer.ip, e))
-                    self.remove_peer(peer)
+                peer.send_to_peer(have_message)
+                logging.info("Sent HAVE message for piece index {} to peer: {}".format(piece_index, peer.ip))
 
 
     # NOTE: I'm not going to tell peers out of my own volition what pieces I have,
