@@ -53,9 +53,6 @@ class PeerStats:
             return float('inf')
         return self.bytes_uploaded / self.bytes_downloaded
 
-    def get_download_rate(self) -> float:
-        return self.download_rate_ema
-
 ##################
 ##################
 ##################

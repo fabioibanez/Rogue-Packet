@@ -268,13 +268,11 @@ class PeersManager(Thread):
         for peer in to_choke:
             if not peer.am_choking():
                 peer.send_to_peer(message.Choke().to_bytes())
-                peer.state['am_interested'] = False
                 logging.info("\033[1;36mChoked peer : %s\033[0m" % peer.ip)
                 self.choking_logger.log_regular_choke(peer)
         for peer in self.unchoked_regular_peers:
             if peer.am_choking():
                 peer.send_to_peer(message.UnChoke().to_bytes())
-                peer.state['am_interested'] = True
                 logging.info("\033[1;36mUnchoked peer : %s\033[0m" % peer.ip)
                 self.choking_logger.log_regular_unchoke(peer)
     
