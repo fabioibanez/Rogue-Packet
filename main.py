@@ -16,6 +16,7 @@ from block import State
 from helpers import cleanup_torrent_download, plot_dirsize_overtime
 import os
 import threading
+from peer import Peer
 
 __author__ = 'alexisgallepe'
 
@@ -25,7 +26,6 @@ import pieces_manager
 import torrent
 import tracker
 import logging
-import os
 import message
 
 
@@ -39,16 +39,12 @@ class Run(object):
     last_log_line = ""
     plot_stop_event = threading.Event()
 
-    def __init__(self):
-        parser = argparse.ArgumentParser(description='BitTorrent client')
-        parser.add_argument('torrent_file', help='Path to the torrent file')
-        parser.add_argument('-v', '--verbose', action='store_true',
-                          help='Enable verbose logging for peer selection')
-        parser.add_argument('-d', '--deletetorrent', action='store_true',
-                          help='Delete any existing, previous torrent folder for your specified torrent target. Speeds up testing.')
-        args = parser.parse_args()
-        self.args = args
-        
+    torrent_file: str
+
+    def __init__(self, args):
+        self.verbose = args.verbose
+        self.torrent_file = args.torrent_file
+
         # Declares a torrent object for the particular torrent file specified by the user
         if args.deletetorrent:
             cleanup_torrent_download(torrent_file=args.torrent_file)
@@ -64,8 +60,6 @@ class Run(object):
             torrent=self.torrent,
             pieces_manager=self.pieces_manager
         )
-        self.verbose = args.verbose
-
 
         self.peers_manager.start()  # This starts the peer manager thread:
         self._start_plot_thread()
@@ -76,7 +70,7 @@ class Run(object):
     def _start_plot_thread(self) -> None:
         """Start the plot thread if a matching directory is found"""
         # Extract directory name from torrent path
-        torrent_name = os.path.splitext(os.path.basename(self.args.torrent_file))[0]
+        torrent_name = os.path.splitext(os.path.basename(self.torrent_file))[0]
         torrent_dir = torrent_name
         
         if os.path.isdir(torrent_dir):
@@ -138,7 +132,7 @@ class Run(object):
                 
                 # If we're here, we DON"T have all the blocks for this piece
                 # We need to ask a peer for a block of this piece
-                peer: 'peer.Peer' = self.peers_manager.get_random_peer_having_piece(index)
+                peer = self.peers_manager.get_random_peer_having_piece(index)
 
                 # If we didn't find any such peer that has the piece, we try again
                 if not peer:
@@ -222,10 +216,13 @@ class Run(object):
 
 
 if __name__ == '__main__':
-    # Usage: clear && time python main.py <torrent_file>
-    
     logging.basicConfig(level=logging.DEBUG)
-
-    # Initializes the run object
-    run = Run()
+    parser = argparse.ArgumentParser(description='BitTorrent client')
+    parser.add_argument('torrent_file', help='Path to the torrent file')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                      help='Enable verbose logging for peer selection')
+    parser.add_argument('-d', '--deletetorrent', action='store_true',
+                      help='Delete any existing, previous torrent folder for your specified torrent target. Speeds up testing.')
+    args = parser.parse_args()
+    run = Run(args)
     run.start()

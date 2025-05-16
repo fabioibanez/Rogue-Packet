@@ -11,11 +11,13 @@ keep track of choke/unchoke set
 '''
 
 import random
-from typing import List, Optional, TypeAlias
+from typing import TypeAlias
 
-import pieces_manager
-import torrent
-import peer_choking_logger
+from pieces_manager import PiecesManager
+from torrent import Torrent
+from peer_choking_logger import PeerChokingLogger
+from message import Message, Handshake, KeepAlive, Choke, UnChoke, Interested, NotInterested, Have, BitField, Request, Piece, Cancel, Port
+from peer import Peer
 
 __author__ = 'alexisgallepe'
 
@@ -23,9 +25,6 @@ import select
 from threading import Thread
 from pubsub import pub
 import logging
-import message
-import peer
-from peer import Peer 
 import errno
 import socket
 
@@ -35,7 +34,7 @@ from bitstring import BitArray
 ##################
 ##################
 
-PeersByPiece: TypeAlias = List[List[peer.Peer]]
+PeersByPiece: TypeAlias = list[list[Peer]]
 """
 Each element of this list is a list of peers who are known to have the piece with that index.
 For example, `peersByPiece[0]` is all the peers who have piece 0
@@ -46,25 +45,25 @@ For example, `peersByPiece[0]` is all the peers who have piece 0
 ##################
 
 class PeersManager(Thread):    
-    def __init__(self, torrent: torrent.Torrent,
-                 pieces_manager: pieces_manager.PiecesManager) -> None:
+    def __init__(self, torrent: Torrent,
+                 pieces_manager: PiecesManager) -> None:
         Thread.__init__(self)
-        self.peers: List[peer.Peer] = []  # List of connected peers
+        self.peers: list[Peer] = []  # List of connected peers
 
         # NOTE: who has given me the most data, these are the regular peers that are unchoked
-        self.unchoked_regular_peers : List[peer.Peer] = []  # List of regular unchoked peers
+        self.unchoked_regular_peers: list[Peer] = []  # List of regular unchoked peers
         # NOTE: this is the peer that we unchoke optimistically
-        self.unchoked_optimistic_peer: Optional[peer.Peer] = None
+        self.unchoked_optimistic_peer: Peer | None = None
 
-        self.torrent: torrent.Torrent = torrent  # Torrent metadata
-        self.pieces_manager: pieces_manager.PiecesManager = pieces_manager  # Manages pieces/blocks
+        self.torrent = torrent  # Torrent metadata
+        self.pieces_manager = pieces_manager  # Manages pieces/blocks
         
         self.peers_by_piece: PeersByPiece = [[] for _ in range(pieces_manager.number_of_pieces)]
         self.is_active: bool = True  # Controls the main thread loop
         self.k_minus_1 = 3
 
         # Initialize the choking logger
-        self.choking_logger = peer_choking_logger.PeerChokingLogger()
+        self.choking_logger = PeerChokingLogger()
 
         # Events
         pub.subscribe(self.peer_requests_piece, 'PeersManager.PeerRequestsPiece')
@@ -74,7 +73,7 @@ class PeersManager(Thread):
         pub.subscribe(self.broadcast_have, 'PeersManager.BroadcastHave')
 
     def broadcast_have(self, piece_index: int) -> None:
-        have_message = message.Have(piece_index).to_bytes()
+        have_message = Have(piece_index).to_bytes()
 
         # Send the HAVE message to all peers, including those that are not interested
         # maybe they will be interested later
@@ -83,10 +82,7 @@ class PeersManager(Thread):
                 peer.send_to_peer(have_message)
                 logging.info("Sent HAVE message for piece index {} to peer: {}".format(piece_index, peer.ip))
 
-
-    # NOTE: I'm not going to tell peers out of my own volition what pieces I have,
-    # but I will respond to their requests for pieces.
-    def peer_requests_piece(self, request: Optional[message.Request] = None, peer: Optional[peer.Peer] = None) -> None:
+    def peer_requests_piece(self, request: Request | None = None, peer: Peer | None = None) -> None:
         if not request or not peer:
             logging.error("empty request/peer message")
         if peer.am_choking():
@@ -96,18 +92,18 @@ class PeersManager(Thread):
         block_offset: int = request.block_offset
         block_length: int = request.block_length
 
-        block: Optional[bytes] = self.pieces_manager.get_block(piece_index, block_offset, block_length)
+        block: bytes | None = self.pieces_manager.get_block(piece_index, block_offset, block_length)
         if block:
-            piece: bytes = message.Piece(piece_index, block_offset, block_length, block).to_bytes()
+            piece = Piece(piece_index, block_offset, block_length, block).to_bytes()
             peer.send_to_peer(piece)
             # TODO: keep track of the amount of data sent to each peer
             logging.info("Sent piece index {} to peer : {}".format(request.piece_index, peer.ip))
 
     def update_peers_bitfield(
         self, 
-        peer: peer.Peer, 
-        piece_index: Optional[int] = None, 
-        bit_field: Optional[BitArray] = None
+        peer: Peer, 
+        piece_index: int | None = None, 
+        bit_field: BitArray | None = None
     ) -> None:
         """
         Called when a peer updates their bit field, either via a `bitfield` or `have` message.
@@ -127,7 +123,7 @@ class PeersManager(Thread):
                 if bit_field[piece_index] == 1:
                     self.update_peers_bitfield(peer, piece_index=piece_index)
 
-    def enumerate_piece_indices_rarest_first(self) -> List[int]:
+    def enumerate_piece_indices_rarest_first(self) -> list[int]:
         """
         Enumerates the indices of pieces in rarest first order.
 
@@ -136,8 +132,7 @@ class PeersManager(Thread):
         """
         return sorted(range(len(self.peers_by_piece)), key=lambda idx: len(self.peers_by_piece[idx]))
 
-
-    def get_random_peer_having_piece(self, index):
+    def get_random_peer_having_piece(self, index) -> Peer | None:
         ready_peers = []
 
         for peer in self.peers:
@@ -160,7 +155,6 @@ class PeersManager(Thread):
             if peer.is_unchoked(): 
                 cpt += 1
         return cpt
-
 
     @staticmethod
     def _read_from_socket(sock: socket.socket) -> bytes:
@@ -185,7 +179,6 @@ class PeersManager(Thread):
         return data
 
     def run(self) -> None:
-
         server = socket.create_server(("0.0.0.0", 8000), reuse_port=True)
         server.setblocking(False)
 
@@ -202,7 +195,7 @@ class PeersManager(Thread):
             read_list, _, _ = select.select(read, [], [], 1)
 
             for sock in read_list:
-                peer: 'peer.Peer' = self.get_peer_by_socket(sock)
+                peer = self.get_peer_by_socket(sock)
                 if not peer.healthy:
                     self.remove_peer(peer)
                     continue
@@ -219,9 +212,9 @@ class PeersManager(Thread):
                 for message in peer.get_messages():
                     self._process_new_message(message, peer)
 
-    def _do_handshake(self, peer: peer.Peer) -> bool:
+    def _do_handshake(self, peer: Peer) -> bool:
         try:
-            handshake: message.Handshake = message.Handshake(self.torrent.info_hash)
+            handshake: Handshake = Handshake(self.torrent.info_hash)
             peer.send_to_peer(handshake.to_bytes())
             logging.info("new peer added : %s" % peer.ip)
             return True
@@ -231,14 +224,14 @@ class PeersManager(Thread):
 
         return False
 
-    def add_peers(self, peers: List[peer.Peer]) -> None:
+    def add_peers(self, peers: list[Peer]) -> None:
         for peer in peers:
             if self._do_handshake(peer):
                 self.peers.append(peer)
             else:
                 print("Error _do_handshake")
 
-    def remove_peer(self, peer: peer.Peer) -> None:
+    def remove_peer(self, peer: Peer) -> None:
         if peer in self.peers:
             try:
                 peer.socket.close()
@@ -247,50 +240,45 @@ class PeersManager(Thread):
 
             self.peers.remove(peer)
 
-        # TODO: Hmmmmm is it really this
-        #for rarest_piece in self.rarest_pieces.rarest_pieces:
-        #    if peer in rarest_piece["peers"]:
-        #        rarest_piece["peers"].remove(peer)
-
-    def get_peer_by_socket(self, socket: socket.socket) -> peer.Peer:
+    def get_peer_by_socket(self, sock: socket.socket) -> Peer:
         for peer in self.peers:
-            if socket == peer.socket:
+            if sock == peer.socket:
                 return peer
 
         raise Exception("Peer not present in peer_list")
 
-    def _process_new_message(self, new_message: message.Message, peer: peer.Peer) -> None:
-        if isinstance(new_message, message.Handshake) or isinstance(new_message, message.KeepAlive):
+    def _process_new_message(self, new_message: Message, peer: Peer) -> None:
+        if isinstance(new_message, Handshake) or isinstance(new_message, KeepAlive):
             logging.error("Handshake or KeepALive should have already been handled")
 
-        elif isinstance(new_message, message.Choke):
+        elif isinstance(new_message, Choke):
             peer.handle_choke()
 
-        elif isinstance(new_message, message.UnChoke):
+        elif isinstance(new_message, UnChoke):
             peer.handle_unchoke()
 
-        elif isinstance(new_message, message.Interested):
+        elif isinstance(new_message, Interested):
             peer.handle_interested()
 
-        elif isinstance(new_message, message.NotInterested):
+        elif isinstance(new_message, NotInterested):
             peer.handle_not_interested()
 
-        elif isinstance(new_message, message.Have):
+        elif isinstance(new_message, Have):
             peer.handle_have(new_message)
 
-        elif isinstance(new_message, message.BitField):
+        elif isinstance(new_message, BitField):
             peer.handle_bitfield(new_message)
 
-        elif isinstance(new_message, message.Request):
+        elif isinstance(new_message, Request):
             peer.handle_request(new_message)
 
-        elif isinstance(new_message, message.Piece):
+        elif isinstance(new_message, Piece):
             peer.handle_piece(new_message)
 
-        elif isinstance(new_message, message.Cancel):
+        elif isinstance(new_message, Cancel):
             peer.handle_cancel()
 
-        elif isinstance(new_message, message.Port):
+        elif isinstance(new_message, Port):
             peer.handle_port_request()
 
         else:
@@ -308,32 +296,32 @@ class PeersManager(Thread):
         logging.info("\033[1;36m[Unchoke] Peers to choke: %s\033[0m", [p.ip for p in to_choke])
         for peer in to_choke:
             if not peer.am_choking():
-                peer.send_to_peer(message.Choke().to_bytes())
+                peer.send_to_peer(Choke().to_bytes())
                 logging.info("\033[1;36mChoked peer : %s\033[0m" % peer.ip)
                 self.choking_logger.log_regular_choke(peer)
         for peer in self.unchoked_regular_peers:
             if peer.am_choking():
-                peer.send_to_peer(message.UnChoke().to_bytes())
+                peer.send_to_peer(UnChoke().to_bytes())
                 logging.info("\033[1;36mUnchoked peer : %s\033[0m" % peer.ip)
                 self.choking_logger.log_regular_unchoke(peer)
     
     def _update_unchoked_optimistic_peers(self) -> None:
         if self.unchoked_optimistic_peer is not None:
-            self.unchoked_optimistic_peer.send_to_peer(message.Choke().to_bytes())
+            self.unchoked_optimistic_peer.send_to_peer(Choke().to_bytes())
             logging.info("\033[1;35m[Optimistic unchoking] Choke the old peer : %s\033[0m" % self.unchoked_optimistic_peer.ip)
             self.choking_logger.log_optimistic_choke(self.unchoked_optimistic_peer)
-        _interested_in: List[peer.Peer] = list(filter(lambda peer: peer.am_interested(), self.peers))
+        _interested_in: list[Peer] = list(filter(lambda peer: peer.am_interested(), self.peers))
         if not _interested_in:
             logging.info("\033[1;35m[Optimistic unchoking] No interested peers\033[0m")
             return
-        _already_unchoked: List[peer.Peer] = self.unchoked_regular_peers
-        eligible_for_optimistic_unchoking: List[peer.Peer] = list(set(_interested_in) - set(_already_unchoked))
+        _already_unchoked: list[Peer] = self.unchoked_regular_peers
+        eligible_for_optimistic_unchoking: list[Peer] = list(set(_interested_in) - set(_already_unchoked))
         logging.info("\033[1;35m[Optimistic unchoking] Eligible peers: %s\033[0m", [p.ip for p in eligible_for_optimistic_unchoking])
         if not eligible_for_optimistic_unchoking:
             logging.info("\033[1;35m[Optimistic unchoking] No eligible peers to unchoke\033[0m")
             return
         lucky_peer = random.choice(eligible_for_optimistic_unchoking)
-        lucky_peer.send_to_peer(message.UnChoke().to_bytes())
+        lucky_peer.send_to_peer(UnChoke().to_bytes())
         self.unchoked_optimistic_peer = lucky_peer
         logging.info("\033[1;35m[Optimistic unchoking] Unchoked peer : %s\033[0m" % lucky_peer.ip)
         self.choking_logger.log_optimistic_unchoke(lucky_peer)

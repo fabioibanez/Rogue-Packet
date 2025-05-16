@@ -1,9 +1,9 @@
 # message.py
 
+from struct import pack, unpack
 import logging
 import random
 import socket
-from struct import pack, unpack
 
 # HandShake - String identifier of the protocol for BitTorrent V1
 import bitstring
@@ -49,12 +49,50 @@ class MessageDispatcher:
 
 
 class Message:
-    def to_bytes(self):
-        raise NotImplementedError()
+    def __init__(self):
+        self.length_prefix = 0
+        self.id = 0
+        self.payload = b''
+        self.total_length = 0
+
+    def to_bytes(self) -> bytes:
+        return pack(">IB", self.length_prefix, self.id) + self.payload
 
     @classmethod
-    def from_bytes(cls, payload):
-        raise NotImplementedError()
+    def from_bytes(cls, payload: bytes) -> 'Message':
+        if len(payload) < 4:
+            raise WrongMessageException("Message length is too short")
+
+        length_prefix, = unpack(">I", payload[:4])
+        if length_prefix == 0:
+            return KeepAlive()
+
+        if len(payload) < 5:
+            raise WrongMessageException("Message length is too short")
+
+        id = payload[4]
+        if id == 0:
+            return Choke()
+        elif id == 1:
+            return UnChoke()
+        elif id == 2:
+            return Interested()
+        elif id == 3:
+            return NotInterested()
+        elif id == 4:
+            return Have()
+        elif id == 5:
+            return BitField()
+        elif id == 6:
+            return Request()
+        elif id == 7:
+            return Piece()
+        elif id == 8:
+            return Cancel()
+        elif id == 9:
+            return Port()
+        else:
+            raise WrongMessageException("Unknown message id")
 
 
 """
@@ -78,10 +116,10 @@ class UdpTrackerConnection(Message):
         self.action = pack('>I', 0)
         self.trans_id = pack('>I', random.randint(0, 100000))
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return self.conn_id + self.action + self.trans_id
 
-    def from_bytes(self, payload):
+    def from_bytes(self, payload: bytes) -> None:
         self.action, = unpack('>I', payload[:4])
         self.trans_id, = unpack('>I', payload[4:8])
         self.conn_id, = unpack('>Q', payload[8:])
@@ -112,7 +150,7 @@ class UdpTrackerAnnounce(Message):
         Total length = 64 + 32 + 32 = 128 bytes
     """
 
-    def __init__(self, info_hash, conn_id, peer_id):
+    def __init__(self, info_hash: bytes, conn_id: int, peer_id: bytes):
         super(UdpTrackerAnnounce, self).__init__()
         self.peer_id = peer_id
         self.conn_id = conn_id
@@ -120,7 +158,7 @@ class UdpTrackerAnnounce(Message):
         self.trans_id = pack('>I', random.randint(0, 100000))
         self.action = pack('>I', 1)
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         conn_id = pack('>Q', self.conn_id)
         action = self.action
         trans_id = self.trans_id
@@ -161,9 +199,9 @@ class UdpTrackerAnnounceOutput:
         self.interval = None
         self.leechers = None
         self.seeders = None
-        self.list_sock_addr = []
+        self.list_sock_addr: list[tuple[str, int]] = []
 
-    def from_bytes(self, payload):
+    def from_bytes(self, payload: bytes) -> None:
         self.action, = unpack('>I', payload[:4])
         self.transaction_id, = unpack('>I', payload[4:8])
         self.interval, = unpack('>I', payload[8:12])
@@ -171,7 +209,7 @@ class UdpTrackerAnnounceOutput:
         self.seeders, = unpack('>I', payload[16:20])
         self.list_sock_addr = self._parse_sock_addr(payload[20:])
 
-    def _parse_sock_addr(self, raw_bytes):
+    def _parse_sock_addr(self, raw_bytes: bytes) -> list[tuple[str, int]]:
         socks_addr = []
 
         # socket address : <IP(4 bytes)><Port(2 bytes)>
@@ -207,7 +245,7 @@ class Handshake(Message):
     payload_length = 68
     total_length = payload_length
 
-    def __init__(self, info_hash, peer_id=b'-ZZ0007-000000000000'):
+    def __init__(self, info_hash: bytes, peer_id: bytes = b'-ZZ0007-000000000000'):
         super(Handshake, self).__init__()
 
         assert len(info_hash) == 20
@@ -215,7 +253,7 @@ class Handshake(Message):
         self.peer_id = peer_id
         self.info_hash = info_hash
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         reserved = b'\x00' * 8
         handshake = pack(">B{}s8s20s20s".format(HANDSHAKE_PSTR_LEN),
                          HANDSHAKE_PSTR_LEN,
@@ -227,7 +265,7 @@ class Handshake(Message):
         return handshake
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'Handshake':
         pstrlen, = unpack(">B", payload[:1])
         pstr, reserved, info_hash, peer_id = unpack(">{}s8s20s20s".format(pstrlen), payload[1:cls.total_length])
 
@@ -248,11 +286,11 @@ class KeepAlive(Message):
     def __init__(self):
         super(KeepAlive, self).__init__()
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return pack(">I", self.payload_length)
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'KeepAlive':
         payload_length = unpack(">I", payload[:cls.total_length])
 
         if payload_length != 0:
@@ -276,11 +314,11 @@ class Choke(Message):
     def __init__(self):
         super(Choke, self).__init__()
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return pack(">IB", self.payload_length, self.message_id)
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'Choke':
         payload_length, message_id = unpack(">IB", payload[:cls.total_length])
         if message_id != cls.message_id:
             raise WrongMessageException("Not a Choke message")
@@ -303,11 +341,11 @@ class UnChoke(Message):
     def __init__(self):
         super(UnChoke, self).__init__()
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return pack(">IB", self.payload_length, self.message_id)
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'UnChoke':
         payload_length, message_id = unpack(">IB", payload[:cls.total_length])
 
         if message_id != cls.message_id:
@@ -331,11 +369,11 @@ class Interested(Message):
     def __init__(self):
         super(Interested, self).__init__()
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return pack(">IB", self.payload_length, self.message_id)
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'Interested':
         payload_length, message_id = unpack(">IB", payload[:cls.total_length])
 
         if message_id != cls.message_id:
@@ -359,11 +397,11 @@ class NotInterested(Message):
     def __init__(self):
         super(NotInterested, self).__init__()
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return pack(">IB", self.payload_length, self.message_id)
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'NotInterested':
         payload_length, message_id = unpack(">IB", payload[:cls.total_length])
         if message_id != cls.message_id:
             raise WrongMessageException("Not a Non Interested message")
@@ -383,15 +421,15 @@ class Have(Message):
     payload_length = 5
     total_length = 4 + payload_length
 
-    def __init__(self, piece_index):
+    def __init__(self, piece_index: int):
         super(Have, self).__init__()
         self.piece_index = piece_index
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return pack(">IBI", self.payload_length, self.message_id, self.piece_index)
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'Have':
         payload_length, message_id, piece_index = unpack(">IBI", payload[:cls.total_length])
         if message_id != cls.message_id:
             raise WrongMessageException("Not a Have message")
@@ -412,7 +450,7 @@ class BitField(Message):
     payload_length = -1
     total_length = -1
 
-    def __init__(self, bitfield):  # bitfield is a bitstring.BitArray
+    def __init__(self, bitfield: bitstring.BitArray):
         super(BitField, self).__init__()
         self.bitfield = bitfield
         self.bitfield_as_bytes = bitfield.tobytes()
@@ -421,14 +459,14 @@ class BitField(Message):
         self.payload_length = 1 + self.bitfield_length
         self.total_length = 4 + self.payload_length
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return pack(">IB{}s".format(self.bitfield_length),
                     self.payload_length,
                     self.message_id,
                     self.bitfield_as_bytes)
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'BitField':
         payload_length, message_id = unpack(">IB", payload[:5])
         bitfield_length = payload_length - 1
 
@@ -455,14 +493,14 @@ class Request(Message):
     payload_length = 13
     total_length = 4 + payload_length
 
-    def __init__(self, piece_index, block_offset, block_length):
+    def __init__(self, piece_index: int, block_offset: int, block_length: int):
         super(Request, self).__init__()
 
         self.piece_index = piece_index
         self.block_offset = block_offset
         self.block_length = block_length
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return pack(">IBIII",
                     self.payload_length,
                     self.message_id,
@@ -471,7 +509,7 @@ class Request(Message):
                     self.block_length)
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'Request':
         payload_length, message_id, piece_index, block_offset, block_length = unpack(">IBIII",
                                                                                      payload[:cls.total_length])
         if message_id != cls.message_id:
@@ -494,7 +532,7 @@ class Piece(Message):
     payload_length = -1
     total_length = -1
 
-    def __init__(self, block_length, piece_index, block_offset, block):
+    def __init__(self, block_length: int, piece_index: int, block_offset: int, block: bytes):
         super(Piece, self).__init__()
 
         self.block_length = block_length
@@ -505,7 +543,7 @@ class Piece(Message):
         self.payload_length = 9 + block_length
         self.total_length = 4 + self.payload_length
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return pack(">IBII{}s".format(self.block_length),
                     self.payload_length,
                     self.message_id,
@@ -514,7 +552,7 @@ class Piece(Message):
                     self.block)
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'Piece':
         block_length = len(payload) - 13
         payload_length, message_id, piece_index, block_offset, block = unpack(">IBII{}s".format(block_length),
                                                                               payload[:13 + block_length])
@@ -537,14 +575,14 @@ class Cancel(Message):
     payload_length = 13
     total_length = 4 + payload_length
 
-    def __init__(self, piece_index, block_offset, block_length):
+    def __init__(self, piece_index: int, block_offset: int, block_length: int):
         super(Cancel, self).__init__()
 
         self.piece_index = piece_index
         self.block_offset = block_offset
         self.block_length = block_length
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return pack(">IBIII",
                     self.payload_length,
                     self.message_id,
@@ -553,7 +591,7 @@ class Cancel(Message):
                     self.block_length)
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'Cancel':
         payload_length, message_id, piece_index, block_offset, block_length = unpack(">IBIII",
                                                                                      payload[:cls.total_length])
         if message_id != cls.message_id:
@@ -574,19 +612,19 @@ class Port(Message):
     payload_length = 5
     total_length = 4 + payload_length
 
-    def __init__(self, listen_port):
+    def __init__(self, listen_port: int):
         super(Port, self).__init__()
 
         self.listen_port = listen_port
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         return pack(">IBI",
                     self.payload_length,
                     self.message_id,
                     self.listen_port)
 
     @classmethod
-    def from_bytes(cls, payload):
+    def from_bytes(cls, payload: bytes) -> 'Port':
         payload_length, message_id, listen_port = unpack(">IBI", payload[:cls.total_length])
 
         if message_id != cls.message_id:

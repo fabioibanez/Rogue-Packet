@@ -1,7 +1,6 @@
 # peer.py
 
 import time
-from typing import Optional
 
 __author__ = 'alexisgallepe'
 
