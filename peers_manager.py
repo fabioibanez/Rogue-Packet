@@ -193,6 +193,7 @@ class PeersManager(Thread):
             try:
                 conn, (ip, port) = server.accept()
                 peer = Peer(int(self.torrent.number_of_pieces), ip, port, conn)
+                peer.healthy = True
                 self.add_peers([peer])
             except BlockingIOError:
                 pass
