@@ -57,12 +57,12 @@ class PeerStats:
 ##################
 
 class Peer(object):
-    def __init__(self, number_of_pieces, ip, port=6881):
+    def __init__(self, number_of_pieces, ip, port=6881, conn: socket.socket | None = None):
         self.last_call = 0.0
         self.has_handshaked = False
         self.healthy = False
         self.read_buffer = b''
-        self.socket = None
+        self.socket = conn
         self.ip = ip
         self.port = port
         self.number_of_pieces = number_of_pieces

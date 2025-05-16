@@ -25,6 +25,7 @@ from pubsub import pub
 import logging
 import message
 import peer
+from peer import Peer 
 import errno
 import socket
 
@@ -184,18 +185,29 @@ class PeersManager(Thread):
         return data
 
     def run(self) -> None:
+
+        server = socket.create_server(("localhost", 8000), reuse_port=True)
+        server.setblocking(False)
+
         while self.is_active:
+            try:
+                conn, (ip, port) = server.accept()
+                peer = Peer(int(self.torrent.number_of_pieces), ip, port, conn)
+                self.add_peers([peer])
+            except BlockingIOError:
+                pass
+
             read = [peer.socket for peer in self.peers]
             read_list, _, _ = select.select(read, [], [], 1)
 
-            for socket in read_list:
-                peer: 'peer.Peer' = self.get_peer_by_socket(socket)
+            for sock in read_list:
+                peer: 'peer.Peer' = self.get_peer_by_socket(sock)
                 if not peer.healthy:
                     self.remove_peer(peer)
                     continue
 
                 try:
-                    payload: bytes = self._read_from_socket(socket)
+                    payload: bytes = self._read_from_socket(sock)
                 except Exception as e:
                     logging.error("Recv failed %s" % e.__str__())
                     self.remove_peer(peer)
