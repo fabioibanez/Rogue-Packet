@@ -70,14 +70,14 @@ class Piece(object):
             if block.state == BlockState.PENDING and (time.time() - block.last_seen) > 5:
                 self.blocks[i] = Block()
 
-    def set_block(self, offset, data):
-        index = int(offset / BLOCK_SIZE)
+    def set_block(self, offset: int, data: bytes):
+        index = offset // BLOCK_SIZE
 
         if not self.is_full and not self.blocks[index].state == BlockState.FULL:
             self.blocks[index].data = data
             self.blocks[index].state = BlockState.FULL
 
-    def get_block(self, block_offset, block_length):
+    def get_block(self, block_offset: int, block_length: int) -> bytes:
         return self.raw_data[block_offset:block_length]
 
     def get_empty_block(self):
@@ -114,7 +114,7 @@ class Piece(object):
 
         return True
 
-    def _init_blocks(self):
+    def _init_blocks(self) -> None:
         self.blocks = []
 
         if self.number_of_blocks > 1:
@@ -128,7 +128,7 @@ class Piece(object):
         else:
             self.blocks.append(Block(block_size=int(self.piece_size)))
 
-    def _write_piece_on_disk(self):
+    def _write_piece_on_disk(self) -> None:
         for info in self.file_info:
             try:
                 f = open(info.path, 'r+b')  # Already existing file
@@ -142,7 +142,7 @@ class Piece(object):
             f.write(self.raw_data[info.piece_offset:info.piece_offset + info.length])
             f.close()
 
-    def _merge_blocks(self):
+    def _merge_blocks(self) -> bytes:
         buf = b''
 
         for block in self.blocks:
@@ -150,7 +150,7 @@ class Piece(object):
 
         return buf
 
-    def _valid_blocks(self, piece_raw_data):
+    def _valid_blocks(self, piece_raw_data: bytes) -> bool:
         hashed_piece_raw_data = hashlib.sha1(piece_raw_data).digest()
 
         if hashed_piece_raw_data == self.piece_hash:
