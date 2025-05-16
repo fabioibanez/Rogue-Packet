@@ -192,9 +192,11 @@ class PeersManager(Thread):
         while self.is_active:
             try:
                 conn, (ip, port) = server.accept()
+                print(f"[PEERS_MANAGER] Got connection {ip}:{port}")
                 peer = Peer(int(self.torrent.number_of_pieces), ip, port, conn)
                 self.add_peers([peer])
             except BlockingIOError:
+                print(f"[PEERS_MANAGER] Got no connection")
                 pass
 
             read = [peer.socket for peer in self.peers]
