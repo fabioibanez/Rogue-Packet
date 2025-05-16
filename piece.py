@@ -2,6 +2,7 @@
 
 __author__ = 'alexisgallepe'
 
+from dataclasses import dataclass
 import hashlib
 import math
 import time
@@ -11,13 +12,36 @@ from pubsub import pub
 from block import Block, BLOCK_SIZE, State
 
 
+@dataclass(frozen=True)
+class PieceFileInfo:
+    """
+    Describes what section of a file that a section of a piece belongs to.
+    A piece can have multiple of these (e.g. multiple files span across the length of one piece)
+    """
+
+    piece_index: int
+    """ The index of the corresponding piece within the torrent """
+
+    length: int
+    """ The length of the region in bytes """
+
+    file_offset: int
+    """ The byte index of the beginning of this region in its containing file """
+
+    piece_offset: int
+    """ The byte index of the beginning of this region in its containing piece """
+
+    path: str
+    """ The relative path of the corresponding file within the torrent """
+
+
 class Piece(object):
     def __init__(self, piece_index: int, piece_size: int, piece_hash: str):
-        self.piece_index: int = piece_index
-        self.piece_size: int = piece_size
-        self.piece_hash: str = piece_hash
+        self.piece_index = piece_index
+        self.piece_size = piece_size
+        self.piece_hash = piece_hash
         self.is_full: bool = False
-        self.files = []
+        self.file_info: list[PieceFileInfo] = []
         self.raw_data: bytes = b''
         self.number_of_blocks: int = int(math.ceil(float(piece_size) / BLOCK_SIZE))
         self.blocks: list[Block] = []
@@ -89,22 +113,17 @@ class Piece(object):
             self.blocks.append(Block(block_size=int(self.piece_size)))
 
     def _write_piece_on_disk(self):
-        for file in self.files:
-            path_file = file["path"]
-            file_offset = file["fileOffset"]
-            piece_offset = file["pieceOffset"]
-            length = file["length"]
-
+        for info in self.file_info:
             try:
-                f = open(path_file, 'r+b')  # Already existing file
+                f = open(info.path, 'r+b')  # Already existing file
             except IOError:
-                f = open(path_file, 'wb')  # New file
+                f = open(info.path, 'wb')  # New file
             except Exception:
                 logging.exception("Can't write to file")
                 return
 
-            f.seek(file_offset)
-            f.write(self.raw_data[piece_offset:piece_offset + length])
+            f.seek(info.file_offset)
+            f.write(self.raw_data[info.piece_offset:info.piece_offset + info.length])
             f.close()
 
     def _merge_blocks(self):

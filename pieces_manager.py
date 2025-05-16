@@ -2,23 +2,24 @@
 
 __author__ = 'alexisgallepe'
 
-from piece import Piece
-import bitstring
+from piece import Piece, PieceFileInfo
+from bitstring import BitArray
 from pubsub import pub
 from torrent import Torrent
 
-class PiecesManager(object):
+class PiecesManager:
+    bitfield: BitArray
+
     def __init__(self, torrent: Torrent):
         self.torrent = torrent
-        self.number_of_pieces = int(torrent.number_of_pieces)
-        self.bitfield = bitstring.BitArray(self.number_of_pieces)
+        self.number_of_pieces = torrent.number_of_pieces
+        self.bitfield = BitArray(self.number_of_pieces)
         self.pieces = self._generate_pieces()
-        self.files = self._load_files()
-        self.complete_pieces = 0
+        self.complete_pieces: int = 0
 
-        for file in self.files:
-            id_piece = file['idPiece']
-            self.pieces[id_piece].files.append(file)
+        file_info = self._generate_file_info()
+        for info in file_info:
+            self.pieces[info.piece_index].file_info.append(info)
 
         # events
         pub.subscribe(self.receive_block_piece, 'PiecesManager.Piece')
@@ -58,7 +59,7 @@ class PiecesManager(object):
 
         return True
 
-    def _generate_pieces(self):
+    def _generate_pieces(self) -> list[Piece]:
         pieces = []
         last_piece = self.number_of_pieces - 1
 
@@ -74,26 +75,27 @@ class PiecesManager(object):
 
         return pieces
 
-    def _load_files(self):
-        files = []
+    def _generate_file_info(self) -> list[PieceFileInfo]:
+        infos: list[PieceFileInfo] = []
         piece_offset = 0
         piece_size_used = 0
 
-        for f in self.torrent.file_names:
-            current_size_file = f["length"]
+        for f in self.torrent.files:
+            current_size_file = f.length
             file_offset = 0
 
             while current_size_file > 0:
-                id_piece = int(piece_offset / self.torrent.piece_length)
-                piece_size = self.pieces[id_piece].piece_size - piece_size_used
+                piece_index = int(piece_offset / self.torrent.piece_length)
+                piece_size = self.pieces[piece_index].piece_size - piece_size_used
 
                 if current_size_file - piece_size < 0:
-                    file = {"length": current_size_file,
-                            "idPiece": id_piece,
-                            "fileOffset": file_offset,
-                            "pieceOffset": piece_size_used,
-                            "path": f["path"]
-                            }
+                    file = PieceFileInfo(
+                        piece_index=piece_index,
+                        length=current_size_file,
+                        file_offset=file_offset,
+                        piece_offset=piece_size_used,
+                        path=f.path
+                    )
                     piece_offset += current_size_file
                     file_offset += current_size_file
                     piece_size_used += current_size_file
@@ -101,15 +103,16 @@ class PiecesManager(object):
 
                 else:
                     current_size_file -= piece_size
-                    file = {"length": piece_size,
-                            "idPiece": id_piece,
-                            "fileOffset": file_offset,
-                            "pieceOffset": piece_size_used,
-                            "path": f["path"]
-                            }
+                    file = PieceFileInfo(
+                        piece_index=piece_index,
+                        length=piece_size,
+                        file_offset=file_offset,
+                        piece_offset=piece_size_used,
+                        path=f.path
+                    )
                     piece_offset += piece_size
                     file_offset += piece_size
                     piece_size_used = 0
 
-                files.append(file)
-        return files
+                infos.append(file)
+        return infos

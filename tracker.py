@@ -25,18 +25,17 @@ class SockAddr:
         self.port = port
         self.allowed = allowed
 
-    def __hash__(self) -> str:
-        return "%s:%d" % (self.ip, self.port)
+    def __hash__(self) -> int:
+        return hash((self.ip, self.port))
 
 
 class Tracker(object):
     def __init__(self, torrent: Torrent):
         self.torrent = torrent
-        self.threads_list = []
-        self.connected_peers: dict[str, Peer] = {}
-        self.dict_sock_addr = {}
+        self.connected_peers: set[Peer] = {}
+        self.dict_sock_addr: dict[int, SockAddr] = {}
 
-    def get_peers_from_trackers(self) -> dict:
+    def get_peers_from_trackers(self):
         for i, tracker in enumerate(self.torrent.announce_list):
             if len(self.dict_sock_addr) >= MAX_PEERS_TRY_CONNECT:
                 break
@@ -75,7 +74,7 @@ class Tracker(object):
 
             print('Connected to %d/%d peers' % (len(self.connected_peers), MAX_PEERS_CONNECTED))
 
-            self.connected_peers[new_peer.__hash__()] = new_peer
+            self.connected_peers.add(new_peer)
 
     def http_scraper(self, torrent: Torrent, tracker: str) -> None:
         params = {

@@ -6,7 +6,7 @@ __author__ = 'alexisgallepe'
 
 import socket
 import struct
-import bitstring
+from bitstring import BitArray
 from pubsub import pub
 import logging
 import message
@@ -15,10 +15,10 @@ import math
 
 class PeerStats:
     def __init__(self, time_window: float = 20.0):
-        self.bytes_uploaded = 0
-        self.bytes_downloaded = 0
-        self.last_upload_time = time.monotonic()
-        self.last_download_time = time.monotonic()
+        self.bytes_uploaded: int = 0
+        self.bytes_downloaded: int = 0
+        self.last_upload_time: float = time.monotonic()
+        self.last_download_time: float = time.monotonic()
         
         self.time_window = time_window  # in seconds
         self.dictionary_of_bytes_received_with_time: dict[float, int] = {}
@@ -56,16 +56,18 @@ class PeerStats:
 ##################
 
 class Peer(object):
-    def __init__(self, number_of_pieces, ip, port=6881, conn: socket.socket | None = None):
+    bitfield: BitArray
+
+    def __init__(self, number_of_pieces: int, ip: str, port: int=6881):
         self.last_call = 0.0
         self.has_handshaked = False
         self.healthy = False
-        self.read_buffer = b''
-        self.socket = conn
+        self.read_buffer: bytes = b''
+        self.socket: socket.socket = None
         self.ip = ip
         self.port = port
         self.number_of_pieces = number_of_pieces
-        self.bit_field = bitstring.BitArray(number_of_pieces)
+        self.bitfield = BitArray(number_of_pieces)
         self.state = {
             # NOTE: i am choking them
             'am_choking': True,
@@ -77,25 +79,26 @@ class Peer(object):
         self.stats = PeerStats()
 
     def __hash__(self):
-        # Changed to return an integer hash value for proper optimistic unchoking
         return hash((self.ip, self.port))
 
-    def connect(self):
-        try:
-            self.socket = socket.create_connection((self.ip, self.port), timeout=2)
-            self.socket.setblocking(False)
-            logging.debug("Connected to peer ip: {} - port: {}".format(self.ip, self.port))
-            self.healthy = True
+    def connect(self, conn: socket.socket | None = None):
+        if conn is not None:
+            self.socket = conn
+        else:
+            try:
+                self.socket = socket.create_connection((self.ip, self.port), timeout=2)
+                logging.debug("Connected to peer ip: {} - port: {}".format(self.ip, self.port))
 
-        except Exception as e:
-            print("Failed to connect to peer (ip: %s - port: %s - %s)" % (self.ip, self.port, e.__str__()))
-            return False
+            except Exception as e:
+                print("Failed to connect to peer (ip: %s - port: %s - %s)" % (self.ip, self.port, e.__str__()))
+                return False
 
+        self.socket.setblocking(False)
+        self.healthy = True
         return True
 
     def send_to_peer(self, msg):
         try:
-            # TODO: rolling average for self.throughput
             self.socket.send(msg)
             self.last_call = time.time()
         except Exception as e:
@@ -107,7 +110,7 @@ class Peer(object):
         return (now - self.last_call) > 0.2
 
     def has_piece(self, index):
-        return self.bit_field[index]
+        return self.bitfield[index]
 
     def am_choking(self):
         return self.state['am_choking']
@@ -159,7 +162,7 @@ class Peer(object):
         particular piece.
         """
         logging.debug('handle_have - ip: %s - piece: %s' % (self.ip, have.piece_index))
-        self.bit_field[have.piece_index] = True
+        self.bitfield[have.piece_index] = True
 
         # NOTE: Piece Revelation
         # This is a peer telling us that they have a piece we don't have
@@ -179,14 +182,14 @@ class Peer(object):
         :type bitfield: message.BitField
         """
         logging.debug('handle_bitfield - %s - %s' % (self.ip, bitfield.bitfield))
-        self.bit_field = bitfield.bitfield
+        self.bitfield = bitfield.bitfield
 
         if self.is_choking() and not self.state['am_interested']:
             interested = message.Interested().to_bytes()
             self.send_to_peer(interested)
             self.state['am_interested'] = True
 
-        pub.sendMessage('PeersManager.UpdatePeersBitfield', peer=self, bit_field=self.bit_field)
+        pub.sendMessage('PeersManager.UpdatePeersBitfield', peer=self, bit_field=self.bitfield)
 
     def handle_request(self, request: message.Request):
         """
@@ -268,3 +271,9 @@ class Peer(object):
 
     def get_upload_ratio(self) -> float:
         return self.stats.get_upload_ratio()
+    
+    def __repr__(self):
+        return f"Peer(ip={self.ip}, port={self.port}, state={self.state})"
+    
+    def __str__(self):
+        return repr(self)

@@ -11,7 +11,7 @@ keep track of choke/unchoke set
 '''
 
 import random
-from typing import TypeAlias
+from typing import Iterable, TypeAlias
 
 from pieces_manager import PiecesManager
 from torrent import Torrent
@@ -40,6 +40,8 @@ Each element of this list is a list of peers who are known to have the piece wit
 For example, `peersByPiece[0]` is all the peers who have piece 0
 """
 
+K_MINUS_1 = 3
+
 ##################
 ##################
 ##################
@@ -51,7 +53,7 @@ class PeersManager(Thread):
         self.peers: list[Peer] = []  # List of connected peers
 
         # NOTE: who has given me the most data, these are the regular peers that are unchoked
-        self.unchoked_regular_peers: list[Peer] = []  # List of regular unchoked peers
+        self.unchoked_peers: list[Peer] = []  # List of regular unchoked peers
         # NOTE: this is the peer that we unchoke optimistically
         self.unchoked_optimistic_peer: Peer | None = None
 
@@ -60,7 +62,6 @@ class PeersManager(Thread):
         
         self.peers_by_piece: PeersByPiece = [[] for _ in range(pieces_manager.number_of_pieces)]
         self.is_active: bool = True  # Controls the main thread loop
-        self.k_minus_1 = 3
 
         # Initialize the choking logger
         self.choking_logger = PeerChokingLogger()
@@ -103,7 +104,7 @@ class PeersManager(Thread):
         self, 
         peer: Peer, 
         piece_index: int | None = None, 
-        bit_field: BitArray | None = None
+        bitfield: BitArray | None = None
     ) -> None:
         """
         Called when a peer updates their bit field, either via a `bitfield` or `have` message.
@@ -118,9 +119,9 @@ class PeersManager(Thread):
             if peer not in peers_list:
                 peers_list.append(peer)
         
-        if bit_field is not None:
-            for piece_index in range(len(bit_field)):
-                if bit_field[piece_index] == 1:
+        if bitfield is not None:
+            for piece_index in range(len(bitfield)):
+                if bitfield[piece_index] == 1:
                     self.update_peers_bitfield(peer, piece_index=piece_index)
 
     def enumerate_piece_indices_rarest_first(self) -> list[int]:
@@ -185,9 +186,8 @@ class PeersManager(Thread):
         while self.is_active:
             try:
                 conn, (ip, port) = server.accept()
-                peer = Peer(int(self.torrent.number_of_pieces), ip, port, conn)
-                peer.healthy = True
-                self.add_peers([peer])
+                peer = Peer(int(self.torrent.number_of_pieces), ip, port)
+                if peer.connect(conn): self.add_peers([peer])
             except BlockingIOError:
                 pass
 
@@ -224,21 +224,25 @@ class PeersManager(Thread):
 
         return False
 
-    def add_peers(self, peers: list[Peer]) -> None:
+    def add_peers(self, peers: Iterable[Peer]) -> None:
         for peer in peers:
             if self._do_handshake(peer):
                 self.peers.append(peer)
             else:
-                print("Error _do_handshake")
+                print("Error handshaking with peer {peer}")
 
     def remove_peer(self, peer: Peer) -> None:
-        if peer in self.peers:
-            try:
-                peer.socket.close()
-            except Exception:
-                logging.exception("")
+        try:
+            peer.socket.close()
+        except Exception:
+            logging.exception("")
 
-            self.peers.remove(peer)
+        if peer in self.peers: self.peers.remove(peer)
+        if peer in self.unchoked_peers: self.unchoked_peers.remove(peer)
+        if self.unchoked_optimistic_peer == peer: self.unchoked_optimistic_peer = None
+        
+        for peers in self.peers_by_piece:
+            if peer in peers: peers.remove(peer)
 
     def get_peer_by_socket(self, sock: socket.socket) -> Peer:
         for peer in self.peers:
@@ -285,21 +289,21 @@ class PeersManager(Thread):
             logging.error("Unknown message")
 
     def _update_unchoked_regular_peers(self) -> None:
-        prev_unchoked = self.unchoked_regular_peers.copy()
+        prev_unchoked = self.unchoked_peers.copy()
         peers_sorted_by_download_rate = sorted(self.peers, key=lambda peer: peer.stats.calculate_download_rate(), reverse=True) 
         peers_sorted_by_download_rate = list(filter(lambda peer: peer.am_interested(), peers_sorted_by_download_rate))
         logging.info("\033[1;36m[Unchoke] Sorted peers by download_rate_ema: %s\033[0m", [(p.ip, p.stats.calculate_download_rate()) for p in peers_sorted_by_download_rate])
-        self.unchoked_regular_peers = peers_sorted_by_download_rate[:self.k_minus_1] 
-        logging.info("\033[1;36m[Unchoke] New unchoked_regular_peers: %s\033[0m", [p.ip for p in self.unchoked_regular_peers])
+        self.unchoked_peers = peers_sorted_by_download_rate[:K_MINUS_1] 
+        logging.info("\033[1;36m[Unchoke] New unchoked_regular_peers: %s\033[0m", [p.ip for p in self.unchoked_peers])
         logging.info("\033[1;36m[Unchoke] Previous unchoked_regular_peers: %s\033[0m", [p.ip for p in prev_unchoked])
-        to_choke = [peer for peer in prev_unchoked if peer not in self.unchoked_regular_peers]
+        to_choke = [peer for peer in prev_unchoked if peer not in self.unchoked_peers]
         logging.info("\033[1;36m[Unchoke] Peers to choke: %s\033[0m", [p.ip for p in to_choke])
         for peer in to_choke:
             if not peer.am_choking():
                 peer.send_to_peer(Choke().to_bytes())
                 logging.info("\033[1;36mChoked peer : %s\033[0m" % peer.ip)
                 self.choking_logger.log_regular_choke(peer)
-        for peer in self.unchoked_regular_peers:
+        for peer in self.unchoked_peers:
             if peer.am_choking():
                 peer.send_to_peer(UnChoke().to_bytes())
                 logging.info("\033[1;36mUnchoked peer : %s\033[0m" % peer.ip)
@@ -314,7 +318,7 @@ class PeersManager(Thread):
         if not _interested_in:
             logging.info("\033[1;35m[Optimistic unchoking] No interested peers\033[0m")
             return
-        _already_unchoked: list[Peer] = self.unchoked_regular_peers
+        _already_unchoked: list[Peer] = self.unchoked_peers
         eligible_for_optimistic_unchoking: list[Peer] = list(set(_interested_in) - set(_already_unchoked))
         logging.info("\033[1;35m[Optimistic unchoking] Eligible peers: %s\033[0m", [p.ip for p in eligible_for_optimistic_unchoking])
         if not eligible_for_optimistic_unchoking:

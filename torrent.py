@@ -1,5 +1,6 @@
 # torrent.py
 
+from dataclasses import dataclass
 import math
 
 from helpers import print_torrent
@@ -12,6 +13,12 @@ from bcoding import bencode, bdecode
 import logging
 import os
 
+@dataclass(frozen=True)
+class TorrentFile:
+    path: str
+    """ The relative path of this file """
+    length: int
+    """ The total length of the file in bytes """
 
 class Torrent(object):
     def __init__(self):
@@ -22,7 +29,7 @@ class Torrent(object):
         self.info_hash: bytes = b''
         self.peer_id: bytes = b''
         self.announce_list: list[list[str]] = []
-        self.file_names: list[dict[str, str | int]] = []
+        self.files: list[TorrentFile] = []
         self.number_of_pieces: int = 0
 
     def load_from_path(self, path: str) -> 'Torrent':        
@@ -41,10 +48,10 @@ class Torrent(object):
         self.init_files()
         self.number_of_pieces = math.ceil(self.total_length / self.piece_length)
         logging.debug(self.announce_list)
-        logging.debug(self.file_names)
+        logging.debug(self.files)
 
         assert(self.total_length > 0)
-        assert(len(self.file_names) > 0)
+        assert(len(self.files) > 0)
 
         return self
 
@@ -61,11 +68,11 @@ class Torrent(object):
                 if not os.path.exists(os.path.dirname(path_file)):
                     os.makedirs(os.path.dirname(path_file))
 
-                self.file_names.append({"path": path_file , "length": file["length"]})
+                self.files.append(TorrentFile(path_file, file["length"]))
                 self.total_length += file["length"]
 
         else:
-            self.file_names.append({"path": root , "length": self.torrent_file['info']['length']})
+            self.files.append(TorrentFile(root, self.torrent_file['info']['length']))
             self.total_length = self.torrent_file['info']['length']
 
     def get_trakers(self) -> list[list[str]]:

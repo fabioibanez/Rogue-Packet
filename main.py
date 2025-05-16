@@ -2,31 +2,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""
-# TODO: Things we need to do to modify this repository:
-
-1. Proportional Share
-> Status Quo: The current implementation picks a random peer at random and asks them for data.
-
-# TODO
-"""
-
 import argparse
 from block import State
 from helpers import cleanup_torrent_download, plot_dirsize_overtime
 import os
 import threading
-from peer import Peer
-
-__author__ = 'alexisgallepe'
-
 import time
-import peers_manager
-import pieces_manager
-import torrent
-import tracker
 import logging
-import message
+
+from peers_manager import PeersManager
+from pieces_manager import PiecesManager
+from torrent import Torrent
+from tracker import Tracker
+from message import Request
 
 
 SLEEP_FOR_NO_UNCHOKED: int = 1
@@ -42,26 +30,16 @@ class Run(object):
     torrent_file: str
 
     def __init__(self, args):
-        self.verbose = args.verbose
-        self.torrent_file = args.torrent_file
+        self.verbose: bool = args.verbose
+        self.torrent_file: str = args.torrent_file
+        if args.deletetorrent: cleanup_torrent_download(torrent_file=args.torrent_file)
 
-        # Declares a torrent object for the particular torrent file specified by the user
-        if args.deletetorrent:
-            cleanup_torrent_download(torrent_file=args.torrent_file)
-        self.torrent: torrent.Torrent = torrent.Torrent().load_from_path(path=args.torrent_file)
-        
-        
-        # Declares a tracker object
-        self.tracker: tracker.Tracker = tracker.Tracker(self.torrent)
-        
-        self.pieces_manager: pieces_manager.PiecesManager = pieces_manager.PiecesManager(torrent=self.torrent)
-        # NOTE: `peers_manager.PeersManager` is actually inherited from `threading.Thread`
-        self.peers_manager: peers_manager.PeersManager = peers_manager.PeersManager(
-            torrent=self.torrent,
-            pieces_manager=self.pieces_manager
-        )
+        self.torrent = Torrent().load_from_path(path=args.torrent_file)
+        self.tracker = Tracker(self.torrent)
+        self.pieces_manager = PiecesManager(self.torrent)
+        self.peers_manager = PeersManager(self.torrent, self.pieces_manager)
+        self.peers_manager.start()  # This starts the peer manager thread
 
-        self.peers_manager.start()  # This starts the peer manager thread:
         self._start_plot_thread()
         
         logging.info("PeersManager Started")
@@ -69,7 +47,6 @@ class Run(object):
 
     def _start_plot_thread(self) -> None:
         """Start the plot thread if a matching directory is found"""
-        # Extract directory name from torrent path
         torrent_name = os.path.splitext(os.path.basename(self.torrent_file))[0]
         torrent_dir = torrent_name
         
@@ -84,21 +61,29 @@ class Run(object):
             logging.info(f"\033[1;32mStarted plotting directory size for: {torrent_dir}\033[0m")
 
     def start(self):
-        # Get all the peers from the trackers (which was embedded in the `announce_list` field of the  torrent file
-        # provided by the user via a CLI option)
-        
-        peers_dict: dict = self.tracker.get_peers_from_trackers()
-        
-        # Tell the peers_manager who our peers are
-        # A peer is anyone we have an open TCP connection with
-        # so this will ultimately `be many more connections than we actually download from 
-        self.peers_manager.add_peers(peers_dict.values())
+        # Queries all peers who have made themselves known to the tracker
+        # TODO: We probably want to do this periodically, instead of only once at start
+        peers = self.tracker.get_peers_from_trackers()
+        self.peers_manager.add_peers(peers)
         
         prev_time_regular_unchoking = time.monotonic()
         prev_time_optimistic_unchoking = time.monotonic()
 
         # While we haven't finished downloading the file
         while not self.pieces_manager.all_pieces_completed(): 
+
+            # updates the unchoked peers state in the PeersManager and sends the unchoke message to the peers
+            delta_regular_unchoking: float = time.monotonic() - prev_time_regular_unchoking
+            if delta_regular_unchoking >= n_secs_regular_unchoking:
+                self.peers_manager._update_unchoked_regular_peers()        
+                prev_time_regular_unchoking = time.monotonic()
+            
+            # updates the optimistic unchoked peers state in the PeersManager and sends the unchoke message to the peers
+            delta_optimistic_unchoking: float = time.monotonic() - prev_time_optimistic_unchoking
+            if delta_optimistic_unchoking >= n_secs_optimistic_unchoking:
+                self.peers_manager._update_unchoked_optimistic_peers()
+                prev_time_optimistic_unchoking = time.monotonic()
+
             # if there's no one can give us data then we wait and infinitely loop
             if not self.peers_manager.has_unchoked_peers():
                 time.sleep(SLEEP_FOR_NO_UNCHOKED)
@@ -117,18 +102,6 @@ class Run(object):
                 # and move on to the next piece
                 if self.pieces_manager.pieces[index].is_full:
                     continue
-                
-                # updates the unchoked peers state in the PeersManager and sends the unchoke message to the peers
-                delta_regular_unchoking: float = time.monotonic() - prev_time_regular_unchoking
-                if delta_regular_unchoking >= n_secs_regular_unchoking:
-                    self.peers_manager._update_unchoked_regular_peers()        
-                    prev_time_regular_unchoking = time.monotonic()
-                
-                # updates the optimistic unchoked peers state in the PeersManager and sends the unchoke message to the peers
-                delta_optimistic_unchoking: float = time.monotonic() - prev_time_optimistic_unchoking
-                if delta_optimistic_unchoking >= n_secs_optimistic_unchoking:
-                    self.peers_manager._update_unchoked_optimistic_peers()
-                    prev_time_optimistic_unchoking = time.monotonic()
                 
                 # If we're here, we DON"T have all the blocks for this piece
                 # We need to ask a peer for a block of this piece
@@ -153,12 +126,10 @@ class Run(object):
                     continue
 
                 piece_index, block_offset, block_length = data
-                piece_data = message.Request(piece_index, block_offset, block_length).to_bytes()
-                # NOTE: requesting a block from a peer
+                piece_data = Request(piece_index, block_offset, block_length).to_bytes()
                 peer.send_to_peer(piece_data)
 
             self.display_progression()
-
             time.sleep(0.1)
 
         logging.info("File(s) downloaded successfully.")
