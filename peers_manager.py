@@ -186,7 +186,7 @@ class PeersManager(Thread):
 
     def run(self) -> None:
 
-        server = socket.create_server(("localhost", 8000), reuse_port=True)
+        server = socket.create_server(("0.0.0.0", 8000), reuse_port=True)
         server.setblocking(False)
 
         while self.is_active:
