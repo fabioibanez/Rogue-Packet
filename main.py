@@ -3,7 +3,6 @@
 # -*- coding: utf-8 -*-
 
 import argparse
-from block import State
 from helpers import cleanup_torrent_download, plot_dirsize_overtime
 import os
 import threading
@@ -12,6 +11,7 @@ import logging
 
 from peers_manager import PeersManager
 from pieces_manager import PiecesManager
+from piece import BlockState
 from torrent import Torrent
 from tracker import Tracker
 from message import Request
@@ -159,7 +159,7 @@ class Run(object):
         # forall pieces, forall blocks, if the block is full, add the length of the block to the total progression int
         for i in range(self.pieces_manager.number_of_pieces):
             for j in range(self.pieces_manager.pieces[i].number_of_blocks):
-                if self.pieces_manager.pieces[i].blocks[j].state == State.FULL:
+                if self.pieces_manager.pieces[i].blocks[j].state == BlockState.FULL:
                     new_progression += len(self.pieces_manager.pieces[i].blocks[j].data)
 
         # If the new progression is the same as the last one, we don't update the display

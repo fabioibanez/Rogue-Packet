@@ -9,8 +9,24 @@ import time
 import logging
 
 from pubsub import pub
-from block import Block, BLOCK_SIZE, State
+from enum import Enum
 
+BLOCK_SIZE = 2 ** 14
+
+class BlockState(Enum):
+    FREE = 0
+    PENDING = 1
+    FULL = 2
+
+class Block():
+    def __init__(self, state: BlockState = BlockState.FREE, block_size: int = BLOCK_SIZE, data: bytes = b'', last_seen: float = 0):
+        self.state: BlockState = state
+        self.block_size: int = block_size
+        self.data: bytes = data
+        self.last_seen: float = last_seen
+
+    def __str__(self):
+        return "%s - %d - %d - %d" % (self.state, self.block_size, len(self.data), self.last_seen)
 
 @dataclass(frozen=True)
 class PieceFileInfo:
@@ -51,15 +67,15 @@ class Piece(object):
     # if block is pending for too long : set it free
     def update_block_status(self):
         for i, block in enumerate(self.blocks):
-            if block.state == State.PENDING and (time.time() - block.last_seen) > 5:
+            if block.state == BlockState.PENDING and (time.time() - block.last_seen) > 5:
                 self.blocks[i] = Block()
 
     def set_block(self, offset, data):
         index = int(offset / BLOCK_SIZE)
 
-        if not self.is_full and not self.blocks[index].state == State.FULL:
+        if not self.is_full and not self.blocks[index].state == BlockState.FULL:
             self.blocks[index].data = data
-            self.blocks[index].state = State.FULL
+            self.blocks[index].state = BlockState.FULL
 
     def get_block(self, block_offset, block_length):
         return self.raw_data[block_offset:block_length]
@@ -69,8 +85,8 @@ class Piece(object):
             return None
 
         for block_index, block in enumerate(self.blocks):
-            if block.state == State.FREE:
-                self.blocks[block_index].state = State.PENDING
+            if block.state == BlockState.FREE:
+                self.blocks[block_index].state = BlockState.PENDING
                 self.blocks[block_index].last_seen = time.time()
                 return self.piece_index, block_index * BLOCK_SIZE, block.block_size
 
@@ -78,7 +94,7 @@ class Piece(object):
 
     def are_all_blocks_full(self):
         for block in self.blocks:
-            if block.state == State.FREE or block.state == State.PENDING:
+            if block.state == BlockState.FREE or block.state == BlockState.PENDING:
                 return False
 
         return True
