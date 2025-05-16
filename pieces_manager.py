@@ -2,6 +2,8 @@
 
 __author__ = 'alexisgallepe'
 
+import hashlib
+import os
 import piece
 import bitstring
 import logging
@@ -59,7 +61,7 @@ class PiecesManager(object):
 
         return True
 
-    def _generate_pieces(self):
+    def _generate_pieces(self) -> list[piece.Piece]:
         pieces = []
         last_piece = self.number_of_pieces - 1
 
@@ -114,3 +116,27 @@ class PiecesManager(object):
 
                 files.append(file)
         return files
+
+    def _check_existing_data(self):
+        for p in self.pieces:
+            data = bytearray(p.piece_size)
+
+            for file_info in p.files:
+                file_path = os.path.join(self.torrent.download_directory, *file_info["path"])
+                if not os.path.exists(file_path):
+                    break  # Incomplete, skip to next piece
+
+                try:
+                    with open(file_path, 'rb') as f:
+                        f.seek(file_info["fileOffset"])
+                        chunk = f.read(file_info["length"])
+                        start = file_info["pieceOffset"]
+                        data[start:start + file_info["length"]] = chunk
+                except Exception as e:
+                    logging.warning(f"Failed to read from file {file_path}: {e}")
+                    break
+
+            if hashlib.sha1(data).digest() == p.hash:
+                p.set_to_full()
+                self.bitfield[p.piece_index] = 1
+                self.complete_pieces += 1

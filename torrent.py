@@ -18,7 +18,7 @@ class Torrent(object):
         self.torrent_file = {}
         self.total_length: int = 0
         self.piece_length: int = 0
-        self.pieces: int = 0
+        self.pieces: bytes = b''
         self.info_hash: str = ''
         self.peer_id: str = ''
         self.announce_list = ''
