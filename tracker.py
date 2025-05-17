@@ -86,6 +86,7 @@ class Tracker(object):
                 continue
 
             if any(peer.ip == sock_addr.ip and peer.port == sock_addr.port for peer in existing_peers):
+                logging.info(f"Skipped peer {sock_addr.ip} since we're already connected.")
                 continue
 
             new_peer = Peer(int(self.torrent.number_of_pieces), sock_addr.ip, sock_addr.port)
