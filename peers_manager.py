@@ -168,7 +168,7 @@ class PeersManager(Thread):
         while self.is_active:
             try:
                 conn, (ip, port) = server.accept()
-                peer = Peer(int(self.torrent.number_of_pieces), ip, port)
+                peer = Peer(self.torrent.number_of_pieces, ip, port)
                 if peer.connect(conn): self.add_peers([peer])
             except BlockingIOError:
                 pass
@@ -207,10 +207,17 @@ class PeersManager(Thread):
 
     def add_peers(self, peers: Iterable[Peer]) -> None:
         for peer in peers:
-            if self._do_handshake(peer):
-                self.peers.append(peer)
-            else:
-                print("Error handshaking with peer {peer}")
+
+            # Send handshake to peer
+            if not self._do_handshake(peer):
+                logging.error(f"Error handshaking with peer {peer.ip}")
+                continue
+
+            # Ask pieces manager to send bitfield to this peer
+            pub.sendMessage('PiecesManager.SendBitfield', peer=peer)
+
+            self.peers.append(peer)
+
 
     def remove_peer(self, peer: Peer) -> None:
         try:
