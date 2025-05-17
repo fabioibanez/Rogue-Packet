@@ -2,6 +2,7 @@
 
 __author__ = 'alexisgallepe'
 
+from bitstring import BitArray
 from piece import Piece, PieceFileInfo
 from pubsub import pub
 from torrent import Torrent
@@ -9,7 +10,7 @@ from torrent import Torrent
 class PiecesManager:
     def __init__(self, torrent: Torrent):
         self.torrent = torrent
-        self.bitfield = bytearray(self.torrent.number_of_pieces)
+        self.bitfield = BitArray(self.torrent.number_of_pieces)
         self.pieces = self._generate_pieces()
 
         file_info = self._generate_file_info()

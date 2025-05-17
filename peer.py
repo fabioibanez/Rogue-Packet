@@ -2,6 +2,8 @@
 
 import time
 
+from bitstring import BitArray
+
 from piece import Piece
 
 __author__ = 'alexisgallepe'
@@ -66,7 +68,7 @@ class Peer(object):
         self.ip = ip
         self.port = port
         self.number_of_pieces = number_of_pieces
-        self.bitfield = bytearray(number_of_pieces)
+        self.bitfield = BitArray(self.number_of_pieces)
         self.state = {
             # NOTE: i am choking them
             'am_choking': True,

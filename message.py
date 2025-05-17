@@ -5,6 +5,8 @@ import logging
 import random
 import socket
 
+from bitstring import BitArray
+
 # HandShake - String identifier of the protocol for BitTorrent V1
 HANDSHAKE_PSTR_V1 = b"BitTorrent protocol"
 HANDSHAKE_PSTR_LEN = len(HANDSHAKE_PSTR_V1)
@@ -448,9 +450,9 @@ class BitField(Message):
     payload_length = -1
     total_length = -1
 
-    def __init__(self, bitfield: bytes):
+    def __init__(self, bitfield: BitArray):
         super(BitField, self).__init__()
-        self.bitfield = bitfield
+        self.bitfield = bitfield.tobytes()
         self.bitfield_length = len(self.bitfield)
 
         self.payload_length = 1 + self.bitfield_length

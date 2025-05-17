@@ -13,6 +13,8 @@ keep track of choke/unchoke set
 import random
 from typing import Iterable, TypeAlias
 
+from bitstring import BitArray
+
 from pieces_manager import PiecesManager
 from torrent import Torrent
 from peer_choking_logger import PeerChokingLogger
@@ -101,7 +103,7 @@ class PeersManager(Thread):
         self, 
         peer: Peer, 
         piece_index: int | None = None, 
-        bitfield: bytearray | None = None
+        bitfield: BitArray | None = None
     ) -> None:
         """
         Called when a peer updates their bit field, either via a `bitfield` or `have` message.
