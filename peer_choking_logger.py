@@ -135,7 +135,7 @@ class PeerChokingLogger:
         self._log_event('regular_choke', peer)
 
     def log_optimistic_unchoke(self, peer: Peer):
-        logging.info("\033[1;35m[Optimistic unchoking] Unchoked peer : %s\033[0m" % lucky_peer.ip)
+        logging.info("\033[1;35m[Optimistic unchoking] Unchoked peer : %s\033[0m" % peer.ip)
         self._update_peer_stats('optimistic_unchoke', peer.ip)
         self._log_event('optimistic_unchoke', peer)
 
