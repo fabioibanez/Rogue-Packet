@@ -65,6 +65,21 @@ class PeerStats:
         Determines the rate at which we are uploading data to the peer.
         """
         return ema(self.bytes_sent_over_time, self.time_window)
+    
+    def on_request(self, request: Request):
+        self.request_log[time.monotonic()] = request
+
+    def on_piece(self, piece: Piece):
+        old_times = [k for k, v in self.request_log.items() if v.piece_index == piece.piece_index or time.monotonic() - k > REQUEST_TIMEOUT]
+        for k in old_times:
+            del self.request_log[k]
+
+    @property
+    def outstanding_requests(self) -> int:
+        old_times = [k for k, v in self.request_log.items() if time.monotonic() - k > REQUEST_TIMEOUT]
+        for k in old_times:
+            del self.request_log[k]
+        return len(self.request_log)
 
 
 ##################
@@ -76,6 +91,7 @@ class Peer(object):
     bitfield: BitArray
 
     def __init__(self, number_of_pieces: int, ip: str, port: int=6881):
+        self.last_call = 0.0
         self.has_handshaked = False
         self.healthy = False
         self.read_buffer: bytes = b''
@@ -116,6 +132,7 @@ class Peer(object):
             logging.info(f"Sending {msg.__class__.__name__} message to peer {self}")
             encoded = msg.to_bytes()
             self.socket.send(encoded)
+            self.last_call = time.time()
         except Exception as e:
             self.healthy = False
             logging.error(f"Failed to send to peer {self} : {str(e)}")
@@ -128,7 +145,7 @@ class Peer(object):
 
     def is_eligible(self):
         now = time.time()
-        return (now - self.last_call) > 0.2
+        return (now - self.last_call) > 0.05
 
     def has_piece(self, piece_index: int):
         return self.bitfield[piece_index]

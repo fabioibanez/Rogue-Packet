@@ -74,14 +74,14 @@ class PeersManager(Thread):
             logging.info("Sent HAVE message for piece index {} to peer: {}".format(piece_index, peer.ip))
 
             # If after completing a piece, the peer no longer has anything to offer, send a NOT INTERESTED message
-            if peer.am_interested() and sum(~self.bitfield & peer.bitfield) == 0:
+            if peer.am_interested() and sum(~bitfield & peer.bitfield) == 0:
                 peer.send_to_peer(NotInterested())
 
     def get_random_peer_having_piece(self, piece_index: int) -> Peer | None:
         ready_peers = []
 
         for peer in self.peers:
-            if peer.is_unchoked() and peer.am_interested() and peer.has_piece(piece_index):
+            if peer.is_eligible() and peer.is_unchoked() and peer.am_interested() and peer.has_piece(piece_index):
                 ready_peers.append(peer)
 
         # TODO: Select peer in ready list that has had highest historical upload bandwidth to us
