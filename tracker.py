@@ -32,12 +32,12 @@ class SockAddr:
 class Tracker(object):
     def __init__(self, torrent: Torrent):
         self.torrent = torrent
-        self.connected_peers: set[Peer] = {}
-        self.dict_sock_addr: dict[int, SockAddr] = {}
+        self.connected_peers: set[Peer] = set()
+        self.sock_addrs: set[SockAddr] = set()
 
     def get_peers_from_trackers(self):
         for i, tracker in enumerate(self.torrent.announce_list):
-            if len(self.dict_sock_addr) >= MAX_PEERS_TRY_CONNECT:
+            if len(self.sock_addrs) >= MAX_PEERS_TRY_CONNECT:
                 break
 
             tracker_url = tracker[0]
@@ -62,9 +62,9 @@ class Tracker(object):
         return self.connected_peers
 
     def try_peer_connect(self) -> None:
-        logging.info("Trying to connect to %d peer(s)" % len(self.dict_sock_addr))
+        logging.info("Trying to connect to %d peer(s)" % len(self.sock_addrs))
 
-        for _, sock_addr in self.dict_sock_addr.items():
+        for sock_addr in self.sock_addrs:
             if len(self.connected_peers) >= MAX_PEERS_CONNECTED:
                 break
 
@@ -108,11 +108,11 @@ class Tracker(object):
                     port = struct.unpack_from("!H",list_peers['peers'], offset)[0]
                     offset += 2
                     s = SockAddr(ip,port)
-                    self.dict_sock_addr[s.__hash__()] = s
+                    self.sock_addrs.add(s)
             else:
                 for p in list_peers['peers']:
                     s = SockAddr(p['ip'], p['port'])
-                    self.dict_sock_addr[s.__hash__()] = s
+                    self.sock_addrs.add(s)
 
         except Exception as e:
             logging.exception("HTTP scraping failed: %s" % e.__str__())
@@ -150,11 +150,9 @@ class Tracker(object):
 
         for ip, port in tracker_announce_output.list_sock_addr:
             sock_addr = SockAddr(ip, port)
+            self.sock_addrs.add(sock_addr)
 
-            if sock_addr.__hash__() not in self.dict_sock_addr:
-                self.dict_sock_addr[sock_addr.__hash__()] = sock_addr
-
-        print("Got %d peers" % len(self.dict_sock_addr))
+        print("Got %d peers" % len(self.sock_addrs))
 
     def send_message(self, conn: tuple[str, int], sock: socket.socket, tracker_message: UdpTrackerConnection | UdpTrackerAnnounce) -> bytes | None:
         message = tracker_message.to_bytes()
