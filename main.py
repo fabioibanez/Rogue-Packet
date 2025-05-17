@@ -68,6 +68,7 @@ class Run(object):
         
         prev_time_regular_unchoking = time.monotonic()
         prev_time_optimistic_unchoking = time.monotonic()
+        prev_time_refreshed = time.monotonic()
 
         # While we haven't finished downloading the file
         while True: 
@@ -86,6 +87,14 @@ class Run(object):
             if delta_optimistic_unchoking >= OPTIMISTIC_UNCHOKE_INTERVAL:
                 self.peers_manager.update_unchoked_optimistic_peers()
                 prev_time_optimistic_unchoking = time.monotonic()
+
+            # updates the optimistic unchoked peers state in the PeersManager and sends the unchoke message to the peers
+            delta_refresh_trackers: float = time.monotonic() - prev_time_refreshed
+            if delta_refresh_trackers >= 60:
+                logging.info("\033[1;32m[REFRESHING THAT TRACKER]\033[0m")
+                new_peers = self.tracker.get_peers_from_trackers(self.peers_manager.peers)
+                self.peers_manager.add_peers(new_peers)
+                prev_time_refreshed = time.monotonic()
 
             # if there's no one can give us data then we wait and infinitely loop
             if not self.peers_manager.has_unchoked_peers():
