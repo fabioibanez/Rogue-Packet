@@ -30,7 +30,6 @@ class PiecesManager:
         pub.subscribe(self.update_peers_bitfield, 'PiecesManager.UpdatePeersBitfield')
 
     def send_bitfield(self, peer: Peer) -> None:
-        logging.info(f"Sending bitfield to peer {peer}")
         peer.send_to_peer(BitField(self.bitfield))
 
     def peer_sent_piece(self, msg: PieceMessage, peer: Peer) -> None:

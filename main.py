@@ -143,7 +143,7 @@ class Run(object):
                 while True:
                     delta_regular_unchoking: float = time.monotonic() - prev_time_regular_unchoking
                     if delta_regular_unchoking >= n_secs_regular_unchoking:
-                        self.peers_manager.update_unchoked_regular_peers()        
+                        self.peers_manager.update_unchoked_regular_peers(seed_mode=True)        
                         prev_time_regular_unchoking = time.monotonic()
                     time.sleep(0.1)
             except KeyboardInterrupt:
