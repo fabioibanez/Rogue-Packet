@@ -1,5 +1,6 @@
 import csv
 from datetime import datetime
+import logging
 from peer import Peer
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -125,17 +126,21 @@ class PeerChokingLogger:
             print(f"Error creating plots: {e}")
 
     def log_regular_unchoke(self, peer: Peer):
+        logging.info("\033[1;36mUnchoked peer : %s\033[0m" % peer.ip)
         self._update_peer_stats('regular_unchoke', peer.ip)
         self._log_event('regular_unchoke', peer)
 
     def log_regular_choke(self, peer: Peer):
+        logging.info("\033[1;36mChoked peer : %s\033[0m" % peer.ip)
         self._log_event('regular_choke', peer)
 
     def log_optimistic_unchoke(self, peer: Peer):
+        logging.info("\033[1;35m[Optimistic unchoking] Unchoked peer : %s\033[0m" % lucky_peer.ip)
         self._update_peer_stats('optimistic_unchoke', peer.ip)
         self._log_event('optimistic_unchoke', peer)
 
     def log_optimistic_choke(self, peer: Peer):
+        logging.info("\033[1;35m[Optimistic unchoking] Choke the old peer : %s\033[0m" % self.unchoked_optimistic_peer.ip)
         self._log_event('optimistic_choke', peer)
 
     def _log_event(self, event_type: str, peer: Peer):

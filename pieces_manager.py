@@ -2,7 +2,10 @@
 
 __author__ = 'alexisgallepe'
 
+import logging
 from bitstring import BitArray
+from message import PieceMessage, Request
+from peer import Peer
 from piece import Piece, PieceFileInfo
 from pubsub import pub
 from torrent import Torrent
@@ -20,36 +23,39 @@ class PiecesManager:
         self._read_from_disk()
 
         # events
-        pub.subscribe(self.receive_block_piece, 'PiecesManager.Piece')
+        pub.subscribe(self.peer_sent_piece, 'PiecesManager.PieceArrived')
+        pub.subscribe(self.peer_requests_piece, 'PiecesManager.PieceRequested')
 
-    def update_bitfield(self, piece_index: int) -> None:
-        self.bitfield[piece_index] = 1
-
-    def receive_block_piece(self, piece: tuple[int, int, bytes]) -> None:
-        piece_index, piece_offset, piece_data = piece
-
-        if self.pieces[piece_index].is_full:
+    def peer_sent_piece(self, msg: PieceMessage, peer: Peer) -> None:
+        if not peer.am_interested():
             return
 
-        self.pieces[piece_index].set_block(piece_offset, piece_data)
-        if self.pieces[piece_index].try_commit():
-            self.update_bitfield(piece_index)
+        if self.pieces[msg.piece_index].is_full:
+            return
+        
+        peer.stats.update_download(len(msg.block))
 
-    def get_block(self, piece_index: int, block_offset: int, block_length: int) -> bytes | None:
-        for piece in self.pieces:
-            if piece_index == piece.piece_index:
-                if piece.is_full:
-                    return piece.get_block(block_offset, block_length)
-                else:
-                    break
+        piece = self.pieces[msg.piece_index]
+        piece.set_block(msg.piece_offset, msg.block)
+        if piece.try_commit():
+            self.bitfield[piece.piece_index] = 1
 
-        return None
+    def peer_requests_piece(self, request: Request, peer: Peer) -> None:
+        if peer.am_choking():
+            return
+        
+        piece = self.pieces[request.piece_index]
+        if not piece.is_full: return
+        block = piece.get_block(request.piece_offset, request.block_length)
+
+        peer.send_to_peer(PieceMessage(request.block_length, request.piece_index, request.piece_offset, block))
+        peer.stats.update_upload(len(block))
+        logging.info(f"Sent piece index {request.piece_index} (bytes {request.piece_offset + request.block_length}) to peer {peer}")
 
     def all_pieces_completed(self) -> bool:
         for piece in self.pieces:
             if not piece.is_full:
                 return False
-
         return True
     
     @property
@@ -144,6 +150,6 @@ class PiecesManager:
                     offset += block.block_size
                 
                 if piece.try_commit(remote=False):
-                    self.update_bitfield(piece.piece_index)
+                    self.bitfield[piece.piece_index] = 1
     
     

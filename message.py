@@ -37,7 +37,7 @@ class MessageDispatcher:
             4: Have,
             5: BitField,
             6: Request,
-            7: Piece,
+            7: PieceMessage,
             8: Cancel,
             9: Port
         }
@@ -86,7 +86,7 @@ class Message:
         elif id == 6:
             return Request()
         elif id == 7:
-            return Piece()
+            return PieceMessage()
         elif id == 8:
             return Cancel()
         elif id == 9:
@@ -490,11 +490,11 @@ class Request(Message):
     payload_length = 13
     total_length = 4 + payload_length
 
-    def __init__(self, piece_index: int, block_offset: int, block_length: int):
+    def __init__(self, piece_index: int, piece_offset: int, block_length: int):
         super(Request, self).__init__()
 
         self.piece_index = piece_index
-        self.block_offset = block_offset
+        self.piece_offset = piece_offset
         self.block_length = block_length
 
     def to_bytes(self) -> bytes:
@@ -502,7 +502,7 @@ class Request(Message):
                     self.payload_length,
                     self.message_id,
                     self.piece_index,
-                    self.block_offset,
+                    self.piece_offset,
                     self.block_length)
 
     @classmethod
@@ -515,7 +515,7 @@ class Request(Message):
         return Request(piece_index, block_offset, block_length)
 
 
-class Piece(Message):
+class PieceMessage(Message):
     """
         PIECE = <length><message id><piece index><block offset><block>
         - length = 9 + block length (4 bytes)
@@ -530,11 +530,11 @@ class Piece(Message):
     total_length = -1
 
     def __init__(self, block_length: int, piece_index: int, block_offset: int, block: bytes):
-        super(Piece, self).__init__()
+        super(PieceMessage, self).__init__()
 
         self.block_length = block_length
         self.piece_index = piece_index
-        self.block_offset = block_offset
+        self.piece_offset = block_offset
         self.block = block
 
         self.payload_length = 9 + block_length
@@ -545,11 +545,11 @@ class Piece(Message):
                     self.payload_length,
                     self.message_id,
                     self.piece_index,
-                    self.block_offset,
+                    self.piece_offset,
                     self.block)
 
     @classmethod
-    def from_bytes(cls, payload: bytes) -> 'Piece':
+    def from_bytes(cls, payload: bytes) -> 'PieceMessage':
         block_length = len(payload) - 13
         payload_length, message_id, piece_index, block_offset, block = unpack(">IBII{}s".format(block_length),
                                                                               payload[:13 + block_length])
@@ -557,7 +557,7 @@ class Piece(Message):
         if message_id != cls.message_id:
             raise WrongMessageException("Not a Piece message")
 
-        return Piece(block_length, piece_index, block_offset, block)
+        return PieceMessage(block_length, piece_index, block_offset, block)
 
 
 class Cancel(Message):

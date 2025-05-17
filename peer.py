@@ -12,7 +12,7 @@ import socket
 import struct
 from pubsub import pub
 import logging
-from message import Handshake, Interested, KeepAlive, Message, MessageDispatcher, Request, UnChoke, WrongMessageException
+from message import Choke, Handshake, Interested, KeepAlive, Message, MessageDispatcher, NotInterested, Request, UnChoke, WrongMessageException
 import time
 import math
 
@@ -27,17 +27,23 @@ class PeerStats:
         self.dictionary_of_bytes_received_with_time: dict[float, int] = {}
 
     def update_upload(self, bytes_sent: int) -> None:
+        """
+        Indicate that we sent `bytes_sent` bytes to the peer.
+        """
         self.bytes_uploaded += bytes_sent
         self.last_upload_time = time.monotonic()
 
     def update_download(self, bytes_received: int) -> None:
+        """
+        Indicate that we received `bytes_received` bytes from the peer.
+        """
         self.bytes_downloaded += bytes_received
         self.dictionary_of_bytes_received_with_time[time.monotonic()] = bytes_received
 
     def calculate_download_rate(self) -> float:
-        '''
-        This will be called when deciding which peer to unchoke
-        '''
+        """
+        Determines the rate at which we are downloading data from the peer.
+        """
         now = time.monotonic()
         weighted_sum = 0
         total_weight = 0
@@ -49,10 +55,6 @@ class PeerStats:
         # this + 1 is a hack that adds an artificial datapoint now
         return weighted_sum / (total_weight + 1)
 
-    def get_upload_ratio(self) -> float:
-        if self.bytes_downloaded == 0:
-            return float('inf')
-        return self.bytes_uploaded / self.bytes_downloaded
 
 ##################
 ##################
@@ -70,12 +72,10 @@ class Peer(object):
         self.number_of_pieces = number_of_pieces
         self.bitfield = BitArray(self.number_of_pieces)
         self.state = {
-            # NOTE: i am choking them
-            'am_choking': True,
-            'am_interested': False,
-            # NOTE: they are choking us
-            'peer_choking': True,
-            'peer_interested': False,
+            'am_choking': True,                 # Are we choking the peer?
+            'am_interested': False,             # Are we interested in the peer?
+            'peer_choking': True,               # Is the peer choking us?
+            'peer_interested': False,           # Is the peer interested in us?
         }
         self.stats = PeerStats()
 
@@ -98,15 +98,20 @@ class Peer(object):
         self.healthy = True
         return True
 
-    def send_to_peer(self, msg: bytes | Message):
+    def send_to_peer(self, msg: Message):
         try:
-            if isinstance(msg, Message):
-                msg = msg.to_bytes()
-            self.socket.send(msg)
+            encoded = msg.to_bytes()
+            self.socket.send(encoded)
             self.last_call = time.time()
         except Exception as e:
             self.healthy = False
             logging.error("Failed to send to peer : %s" % e.__str__())
+            return
+        
+        if isinstance(msg, UnChoke): self.state['am_choking'] = False
+        if isinstance(msg, Choke): self.state['am_choking'] = True
+        if isinstance(msg, Interested): self.state['am_interested'] = True
+        if isinstance(msg, NotInterested): self.state['am_interested'] = False
 
     def is_eligible(self):
         now = time.time()
@@ -149,8 +154,6 @@ class Peer(object):
         logging.debug('handle_interested - %s' % self.ip)
         self.state['peer_interested'] = True
 
-        if self.am_choking():
-            self.send_to_peer(UnChoke())
 
     def handle_not_interested(self):
         logging.debug('handle_not_interested - %s' % self.ip)
@@ -197,18 +200,14 @@ class Peer(object):
         :type request: message.Request
         """
         logging.debug('handle_request - %s' % self.ip)
-        if self.is_interested() and self.is_unchoked():
-            pub.sendMessage('PiecesManager.PeerRequestsPiece', request=request, peer=self)
-            # NOTE: by shounak, track upload when sending pieces
-            self.update_upload_stats(len(request.to_bytes()))
+        pub.sendMessage('PiecesManager.PieceRequested', request=request, peer=self)
+            
 
     def handle_piece(self, message: Piece): 
         """
         :type message: message.Piece
         """
-        pub.sendMessage('PiecesManager.Piece', piece=(message.piece_index, message.block_offset, message.block))
-        # NOTE: by shounak, track download when receiving pieces
-        self.update_download_stats(len(message.block))
+        pub.sendMessage('PiecesManager.PieceArrived', piece=message, peer=self)
 
     def handle_cancel(self):
         logging.debug('handle_cancel - %s' % self.ip)
@@ -264,17 +263,13 @@ class Peer(object):
             except WrongMessageException as e:
                 logging.exception(e.__str__())
 
-    def update_upload_stats(self, bytes_sent: int) -> None:
-        self.stats.update_upload(bytes_sent)
-
-    def update_download_stats(self, bytes_received: int) -> None:
-        self.stats.update_download(bytes_received)
-
-    def get_upload_ratio(self) -> float:
-        return self.stats.get_upload_ratio()
-    
     def __repr__(self):
-        return f"Peer(ip={self.ip}, port={self.port}, state={self.state})"
+        state = ""
+        if self.am_choking(): state += "C"
+        if self.am_interested(): state += "I"
+        if self.is_choking(): state += "c"
+        if self.is_interested(): state += "i"
+        return f"Peer(ip={self.ip}, state={state})"
     
     def __str__(self):
         return repr(self)
