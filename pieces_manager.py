@@ -4,7 +4,7 @@ __author__ = 'alexisgallepe'
 
 import logging
 from bitstring import BitArray
-from message import PieceMessage, Request
+from message import BitField, PieceMessage, Request
 from peer import Peer
 from piece import Piece, PieceFileInfo
 from pubsub import pub
@@ -23,8 +23,13 @@ class PiecesManager:
         self._read_from_disk()
 
         # events
+        pub.subscribe(self.send_bitfield, 'PiecesManager.SendBitfield')
         pub.subscribe(self.peer_sent_piece, 'PiecesManager.PieceArrived')
         pub.subscribe(self.peer_requests_piece, 'PiecesManager.PieceRequested')
+
+    def send_bitfield(self, peer: Peer) -> None:
+        logging.info(f"Sending bitfield to peer {peer}")
+        peer.send_to_peer(BitField(self.bitfield))
 
     def peer_sent_piece(self, msg: PieceMessage, peer: Peer) -> None:
         if not peer.am_interested():
