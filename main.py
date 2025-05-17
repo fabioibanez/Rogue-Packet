@@ -29,9 +29,10 @@ class Run(object):
 
     torrent_file: str
 
-    def __init__(self, args):
+    def __init__(self, args: argparse.Namespace):
         self.verbose: bool = args.verbose
         self.torrent_file: str = args.torrent_file
+        self.seed_after_download: bool = args.seed
         if args.deletetorrent: cleanup_torrent_download(torrent_file=args.torrent_file)
 
         self.torrent = Torrent().load_from_path(path=args.torrent_file)
@@ -134,6 +135,13 @@ class Run(object):
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
 
+        if self.seed_after_download:
+            logging.info("Download complete. Continuing to seed...")
+            try:
+                while True: time.sleep(1)
+            except KeyboardInterrupt:
+                logging.info("Seeding stopped...")
+
         self._exit_threads()
 
     def display_progression(self):
@@ -190,9 +198,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='BitTorrent client')
     parser.add_argument('torrent_file', help='Path to the torrent file')
     parser.add_argument('-v', '--verbose', action='store_true',
-                      help='Enable verbose logging for peer selection')
+                        help='Enable verbose logging for peer selection')
     parser.add_argument('-d', '--deletetorrent', action='store_true',
-                      help='Delete any existing, previous torrent folder for your specified torrent target. Speeds up testing.')
+                        help='Delete any existing, previous torrent folder for your specified torrent target. Speeds up testing.')
+    parser.add_argument('-s', '--seed', action='store_true',
+                        help='Seed the torrent after downloading it')
     args = parser.parse_args()
     run = Run(args)
     run.start()

@@ -41,7 +41,9 @@ class PiecesManager:
             self.bitfield[piece.piece_index] = 1
 
     def peer_requests_piece(self, request: Request, peer: Peer) -> None:
-        if peer.am_choking():
+        # If we've completed all pieces, we'll give data to anyone who requests it!
+        # Otherwise, we will deny upload to peers that we are choking
+        if not self.all_pieces_completed() and peer.am_choking():
             return
         
         piece = self.pieces[request.piece_index]
