@@ -49,50 +49,12 @@ class MessageDispatcher:
 
 
 class Message:
-    def __init__(self):
-        self.length_prefix = 0
-        self.id = 0
-        self.payload = b''
-        self.total_length = 0
-
     def to_bytes(self) -> bytes:
-        return pack(">IB", self.length_prefix, self.id) + self.payload
+        raise NotImplementedError()
 
     @classmethod
     def from_bytes(cls, payload: bytes) -> 'Message':
-        if len(payload) < 4:
-            raise WrongMessageException("Message length is too short")
-
-        length_prefix, = unpack(">I", payload[:4])
-        if length_prefix == 0:
-            return KeepAlive()
-
-        if len(payload) < 5:
-            raise WrongMessageException("Message length is too short")
-
-        id = payload[4]
-        if id == 0:
-            return Choke()
-        elif id == 1:
-            return UnChoke()
-        elif id == 2:
-            return Interested()
-        elif id == 3:
-            return NotInterested()
-        elif id == 4:
-            return Have()
-        elif id == 5:
-            return BitField()
-        elif id == 6:
-            return Request()
-        elif id == 7:
-            return PieceMessage()
-        elif id == 8:
-            return Cancel()
-        elif id == 9:
-            return Port()
-        else:
-            raise WrongMessageException("Unknown message id")
+        raise NotImplementedError()
 
 
 """
