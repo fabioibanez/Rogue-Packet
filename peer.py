@@ -16,44 +16,52 @@ from message import Choke, Handshake, Interested, KeepAlive, Message, MessageDis
 import time
 import math
 
+
+def ema(series: dict[float, int], time_window: float) -> float:
+    now = time.monotonic()
+    weighted_sum = 0
+    total_weight = 0
+    for t, x in series.items():
+        dt = now - t
+        w = math.exp(-dt / time_window)
+        weighted_sum += x * w
+        total_weight += w
+    # this + 1 is a hack that adds an artificial datapoint now
+    return weighted_sum / (total_weight + 1)
 class PeerStats:
     def __init__(self, time_window: float = 20.0):
         self.bytes_uploaded: int = 0
         self.bytes_downloaded: int = 0
-        self.last_upload_time: float = time.monotonic()
-        self.last_download_time: float = time.monotonic()
         
         self.time_window = time_window  # in seconds
-        self.dictionary_of_bytes_received_with_time: dict[float, int] = {}
+        self.bytes_received_over_time: dict[float, int] = {}
+        self.bytes_sent_over_time: dict[float, int] = {}
 
     def update_upload(self, bytes_sent: int) -> None:
         """
         Indicate that we sent `bytes_sent` bytes to the peer.
         """
         self.bytes_uploaded += bytes_sent
-        self.last_upload_time = time.monotonic()
+        self.bytes_sent_over_time[time.monotonic()] = bytes_sent
 
     def update_download(self, bytes_received: int) -> None:
         """
         Indicate that we received `bytes_received` bytes from the peer.
         """
         self.bytes_downloaded += bytes_received
-        self.dictionary_of_bytes_received_with_time[time.monotonic()] = bytes_received
+        self.bytes_received_over_time[time.monotonic()] = bytes_received
 
     def calculate_download_rate(self) -> float:
         """
         Determines the rate at which we are downloading data from the peer.
         """
-        now = time.monotonic()
-        weighted_sum = 0
-        total_weight = 0
-        for t, x in self.dictionary_of_bytes_received_with_time.items():
-            dt = now - t
-            w = math.exp(-dt / self.time_window)
-            weighted_sum += x * w
-            total_weight += w
-        # this + 1 is a hack that adds an artificial datapoint now
-        return weighted_sum / (total_weight + 1)
+        return ema(self.bytes_received_over_time, self.time_window)
+    
+    def calculate_upload_rate(self) -> float:
+        """
+        Determines the rate at which we are uploading data to the peer.
+        """
+        return ema(self.bytes_sent_over_time, self.time_window)
 
 
 ##################

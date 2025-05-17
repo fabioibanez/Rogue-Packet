@@ -76,13 +76,13 @@ class Run(object):
             # updates the unchoked peers state in the PeersManager and sends the unchoke message to the peers
             delta_regular_unchoking: float = time.monotonic() - prev_time_regular_unchoking
             if delta_regular_unchoking >= n_secs_regular_unchoking:
-                self.peers_manager._update_unchoked_regular_peers()        
+                self.peers_manager.update_unchoked_regular_peers()        
                 prev_time_regular_unchoking = time.monotonic()
             
             # updates the optimistic unchoked peers state in the PeersManager and sends the unchoke message to the peers
             delta_optimistic_unchoking: float = time.monotonic() - prev_time_optimistic_unchoking
             if delta_optimistic_unchoking >= n_secs_optimistic_unchoking:
-                self.peers_manager._update_unchoked_optimistic_peers()
+                self.peers_manager.update_unchoked_optimistic_peers()
                 prev_time_optimistic_unchoking = time.monotonic()
 
             # if there's no one can give us data then we wait and infinitely loop
@@ -135,10 +135,17 @@ class Run(object):
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
 
+        # If the user wants to seed after downloading, we continue to seed
+        # with a modified unchoking algorithm that prefers peers with a higher upload rate
         if self.seed_after_download:
             logging.info("Download complete. Continuing to seed...")
             try:
-                while True: time.sleep(1)
+                while True:
+                    delta_regular_unchoking: float = time.monotonic() - prev_time_regular_unchoking
+                    if delta_regular_unchoking >= n_secs_regular_unchoking:
+                        self.peers_manager.update_unchoked_regular_peers()        
+                        prev_time_regular_unchoking = time.monotonic()
+                    time.sleep(0.1)
             except KeyboardInterrupt:
                 logging.info("Seeding stopped...")
 

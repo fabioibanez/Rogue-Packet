@@ -276,10 +276,15 @@ class PeersManager(Thread):
         else:
             logging.error("Unknown message")
 
-    def _update_unchoked_regular_peers(self) -> None:
+    def update_unchoked_regular_peers(self, seed_mode: bool = False) -> None:
         prev_unchoked = self.unchoked_peers.copy()
-        sorted_peers = sorted(self.peers, key=lambda peer: peer.stats.calculate_download_rate(), reverse=True) 
-        sorted_peers = [peer for peer in sorted_peers if peer.am_interested()]
+
+        if not seed_mode:
+            sorted_peers = sorted(self.peers, key=lambda peer: peer.stats.calculate_download_rate(), reverse=True) 
+            sorted_peers = [peer for peer in sorted_peers if peer.am_interested()]
+        else:
+            sorted_peers = sorted(self.peers, key=lambda peer: peer.stats.calculate_upload_rate(), reverse=True)
+        
         self.unchoked_peers = sorted_peers[:K_MINUS_1]
 
         to_choke = [peer for peer in prev_unchoked if peer not in self.unchoked_peers]
@@ -294,7 +299,7 @@ class PeersManager(Thread):
                 peer.send_to_peer(UnChoke())
                 self.choking_logger.log_regular_unchoke(peer)
     
-    def _update_unchoked_optimistic_peers(self) -> None:
+    def update_unchoked_optimistic_peers(self) -> None:
         eligible_peers = [peer for peer in self.peers if peer.is_interested() and peer.am_choking()]
         if not eligible_peers:
             logging.info("\033[1;35m[Optimistic unchoking] No eligible peers\033[0m")
