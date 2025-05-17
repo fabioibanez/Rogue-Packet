@@ -3,8 +3,9 @@
 __author__ = 'alexisgallepe'
 
 import logging
+from typing import TypeAlias
 from bitstring import BitArray
-from message import BitField, PieceMessage, Request
+from message import BitField, Interested, NotInterested, PieceMessage, Request
 from peer import Peer
 from piece import Piece, PieceFileInfo
 from pubsub import pub
@@ -26,6 +27,7 @@ class PiecesManager:
         pub.subscribe(self.send_bitfield, 'PiecesManager.SendBitfield')
         pub.subscribe(self.peer_sent_piece, 'PiecesManager.PieceArrived')
         pub.subscribe(self.peer_requests_piece, 'PiecesManager.PieceRequested')
+        pub.subscribe(self.update_peers_bitfield, 'PiecesManager.UpdatePeersBitfield')
 
     def send_bitfield(self, peer: Peer) -> None:
         logging.info(f"Sending bitfield to peer {peer}")
@@ -44,6 +46,8 @@ class PiecesManager:
         piece.set_block(msg.piece_offset, msg.block)
         if piece.try_commit():
             self.bitfield[piece.piece_index] = 1
+            self.write_to_disk()
+            pub.sendMessage('PeersManager.BroadcastHave', piece_index=self.piece_index, bitfield=self.bitfield)
 
     def peer_requests_piece(self, request: Request, peer: Peer) -> None:
         # If we've completed all pieces, we'll give data to anyone who requests it!
@@ -58,6 +62,43 @@ class PiecesManager:
         peer.send_to_peer(PieceMessage(request.block_length, request.piece_index, request.piece_offset, block))
         peer.stats.update_upload(len(block))
         logging.info(f"Sent piece index {request.piece_index} (bytes {request.piece_offset}-{request.piece_offset + request.block_length}) to peer {peer}")
+
+    def update_peers_bitfield(
+        self, 
+        peer: Peer, 
+        piece_index: int | None = None, 
+        bitfield: BitArray | None = None
+    ) -> None:
+        """
+        Called when a peer updates their bit field, either via a `bitfield` or `have` message.
+
+        @param peer             The peer whose bitfield should be updated
+        @param piece_index      Optionally, the index of the piece that the peer received
+        @param bit_field        Optionally, the bit_field of the peer
+        """
+
+        if piece_index is not None:
+            peers_list = self.pieces[piece_index].peers
+            if peer not in peers_list:
+                peers_list.append(peer)
+
+            # If a peer has something we don't, tell them we're interested
+            if self.bitfield[piece_index] == 0 and not peer.am_interested():
+                peer.send_to_peer(Interested())
+        
+        if bitfield is not None:
+            for piece_index in range(len(bitfield)):
+                if bitfield[piece_index] == 1:
+                    self.update_peers_bitfield(peer, piece_index=piece_index)
+    
+    def enumerate_piece_indices_rarest_first(self) -> list[int]:
+        """
+        Enumerates the indices of pieces in rarest first order.
+
+        This will return pieces which no known peers have.
+        In other words, piece indices whose piece has a peer count of 0 will be returned.
+        """
+        return sorted(range(len(self.pieces)), key=lambda idx: len(self.pieces[idx].peers))
 
     def all_pieces_completed(self) -> bool:
         for piece in self.pieces:
@@ -156,7 +197,7 @@ class PiecesManager:
                     piece.set_block(offset, piece_data[offset:offset + block.block_size])
                     offset += block.block_size
                 
-                if piece.try_commit(remote=False):
+                if piece.try_commit():
                     self.bitfield[piece.piece_index] = 1
     
     

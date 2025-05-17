@@ -11,9 +11,10 @@ keep track of choke/unchoke set
 '''
 
 import random
-from typing import Iterable, TypeAlias
+from typing import Iterable
 
 from bitstring import BitArray
+
 
 from pieces_manager import PiecesManager
 from torrent import Torrent
@@ -30,22 +31,8 @@ import logging
 import errno
 import socket
 
-##################
-##################
-##################
-
-PeersByPiece: TypeAlias = list[list[Peer]]
-"""
-Each element of this list is a list of peers who are known to have the piece with that index.
-For example, `peersByPiece[0]` is all the peers who have piece 0
-"""
 
 K_MINUS_1 = 3
-
-##################
-##################
-##################
-
 class PeersManager(Thread):    
     def __init__(self, torrent: Torrent,
                  pieces_manager: PiecesManager) -> None:
@@ -59,61 +46,27 @@ class PeersManager(Thread):
 
         self.torrent = torrent  # Torrent metadata
         self.pieces_manager = pieces_manager  # Manages pieces/blocks
-        
-        self.peers_by_piece: PeersByPiece = [[] for _ in range(pieces_manager.number_of_pieces)]
         self.is_active: bool = True  # Controls the main thread loop
 
         # Initialize the choking logger
         self.choking_logger = PeerChokingLogger()
 
         # Events
-        pub.subscribe(self.update_peers_bitfield, 'PeersManager.UpdatePeersBitfield')
-
-        # added for HAVE message sending
         pub.subscribe(self.broadcast_have, 'PeersManager.BroadcastHave')
 
-    def broadcast_have(self, piece_index: int) -> None:
+    def broadcast_have(self, piece_index: int, bitfield: BitArray) -> None:
         have_message = Have(piece_index)
 
         # Send the HAVE message to all peers, including those that are not interested
         # maybe they will be interested later
         for peer in self.peers:
-            if peer.healthy:
-                peer.send_to_peer(have_message)
-                logging.info("Sent HAVE message for piece index {} to peer: {}".format(piece_index, peer.ip))
+            if not peer.healthy: continue
+            peer.send_to_peer(have_message)
+            logging.info("Sent HAVE message for piece index {} to peer: {}".format(piece_index, peer.ip))
 
-    def update_peers_bitfield(
-        self, 
-        peer: Peer, 
-        piece_index: int | None = None, 
-        bitfield: BitArray | None = None
-    ) -> None:
-        """
-        Called when a peer updates their bit field, either via a `bitfield` or `have` message.
-
-        @param peer             The peer whose bitfield should be updated
-        @param piece_index      Optionally, the index of the piece that the peer received
-        @param bit_field        Optionally, the bit_field of the peer
-        """
-
-        if piece_index is not None:
-            peers_list = self.peers_by_piece[piece_index]
-            if peer not in peers_list:
-                peers_list.append(peer)
-        
-        if bitfield is not None:
-            for piece_index in range(len(bitfield)):
-                if bitfield[piece_index] == 1:
-                    self.update_peers_bitfield(peer, piece_index=piece_index)
-
-    def enumerate_piece_indices_rarest_first(self) -> list[int]:
-        """
-        Enumerates the indices of pieces in rarest first order.
-
-        This will return pieces which no known peers have.
-        In other words, piece indices whose piece has a peer count of 0 will be returned.
-        """
-        return sorted(range(len(self.peers_by_piece)), key=lambda idx: len(self.peers_by_piece[idx]))
+            # If after completing a piece, the peer no longer has anything to offer, send a NOT INTERESTED message
+            if peer.am_interested() and sum(~self.bitfield & peer.bitfield) == 0:
+                peer.send_to_peer(NotInterested())
 
     def get_random_peer_having_piece(self, piece_index: int) -> Peer | None:
         ready_peers = []
@@ -228,9 +181,6 @@ class PeersManager(Thread):
         if peer in self.peers: self.peers.remove(peer)
         if peer in self.unchoked_peers: self.unchoked_peers.remove(peer)
         if self.unchoked_optimistic_peer == peer: self.unchoked_optimistic_peer = None
-        
-        for peers in self.peers_by_piece:
-            if peer in peers: peers.remove(peer)
 
     def get_peer_by_socket(self, sock: socket.socket) -> Peer:
         for peer in self.peers:

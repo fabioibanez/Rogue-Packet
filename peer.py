@@ -12,7 +12,7 @@ import socket
 import struct
 from pubsub import pub
 import logging
-from message import BitField, Choke, Handshake, Interested, KeepAlive, Message, MessageDispatcher, NotInterested, Request, UnChoke, WrongMessageException
+from message import BitField, Choke, Handshake, Have, Interested, KeepAlive, Message, MessageDispatcher, NotInterested, Request, UnChoke, WrongMessageException
 import time
 import math
 
@@ -111,6 +111,7 @@ class Peer(object):
 
     def send_to_peer(self, msg: Message):
         try:
+            logging.info(f"Sending {msg.__class__.__name__} message to peer {self}")
             encoded = msg.to_bytes()
             self.socket.send(encoded)
             self.last_call = time.time()
@@ -165,12 +166,11 @@ class Peer(object):
         logging.debug('handle_interested - %s' % self.ip)
         self.state['peer_interested'] = True
 
-
     def handle_not_interested(self):
         logging.debug('handle_not_interested - %s' % self.ip)
         self.state['peer_interested'] = False
 
-    def handle_have(self, have):
+    def handle_have(self, have: Have):
         """
         :type have: message.Have
 
@@ -179,18 +179,7 @@ class Peer(object):
         """
         logging.debug('handle_have - ip: %s - piece: %s' % (self.ip, have.piece_index))
         self.bitfield[have.piece_index] = True
-
-        # NOTE: Piece Revelation
-        # This is a peer telling us that they have a piece we don't have
-        # We need to update our bitfield to reflect this
-
-        # If they are choking us (aka we're not getting data from them),
-        # and we are not interested in them
-        if self.is_choking() and not self.state['am_interested']:
-            self.send_to_peer(Interested())
-            self.state['am_interested'] = True
-
-        pub.sendMessage('PeersManager.UpdatePeersBitfield', peer=self, piece_index=have.piece_index)
+        pub.sendMessage('PiecesManager.UpdatePeersBitfield', peer=self, piece_index=have.piece_index)
 
     def handle_bitfield(self, bitfield: BitField):
         """
@@ -198,13 +187,7 @@ class Peer(object):
         """
         logging.debug('handle_bitfield - %s - %s' % (self.ip, bitfield.bitfield))
         self.bitfield = BitArray(bitfield.bitfield)
-
-        if self.is_choking() and not self.state['am_interested']:
-            interested = Interested()
-            self.send_to_peer(interested)
-            self.state['am_interested'] = True
-
-        pub.sendMessage('PeersManager.UpdatePeersBitfield', peer=self, bitfield=self.bitfield)
+        pub.sendMessage('PiecesManager.UpdatePeersBitfield', peer=self, bitfield=self.bitfield)
 
     def handle_request(self, request: Request):
         """

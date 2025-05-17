@@ -8,8 +8,9 @@ import math
 import time
 import logging
 
-from pubsub import pub
 from enum import Enum
+
+from peer import Peer
 
 BLOCK_SIZE = 2 ** 14
 
@@ -61,6 +62,7 @@ class Piece(object):
         self.raw_data: bytes = b''
         self.number_of_blocks: int = int(math.ceil(float(piece_size) / BLOCK_SIZE))
         self.blocks: list[Block] = []
+        self.peers: list[Peer] = [] # Peers who have this piece
 
         self._init_blocks()
 
@@ -93,13 +95,12 @@ class Piece(object):
 
         return None
 
-    def try_commit(self, remote: bool = True) -> bool:
+    def try_commit(self) -> bool:
         """
         Attempts to commit the piece on disk if it is complete.
         This will verify the piece's hash and set the piece as full if it is valid.
         If the hash is invalid, the piece will be reset.
 
-        @param remote: Whether to write the piece to disk and broadcast a HAVE message if it was completed
         @return: True if the piece was committed, False otherwise
         """
         if any(block.state != BlockState.FULL for block in self.blocks):
@@ -115,10 +116,6 @@ class Piece(object):
 
         self.is_full = True
         self.raw_data = data
-
-        if remote:
-            self._write_piece_on_disk()
-            pub.sendMessage('PeersManager.BroadcastHave', piece_index=self.piece_index)
             
         return True
 
@@ -136,7 +133,7 @@ class Piece(object):
         else:
             self.blocks.append(Block(block_size=int(self.piece_size)))
 
-    def _write_piece_on_disk(self) -> None:
+    def write_to_disk(self) -> None:
         for info in self.file_info:
             try:
                 f = open(info.path, 'r+b')  # Already existing file
