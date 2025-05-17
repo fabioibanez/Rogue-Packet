@@ -73,7 +73,7 @@ class PiecesManager:
         piece.set_block(msg.piece_offset, msg.block)
         if piece.try_commit():
             self.bitfield[piece.piece_index] = 1
-            self.write_to_disk()
+            piece.write_to_disk()
             pub.sendMessage('PeersManager.BroadcastHave', piece_index=self.piece_index, bitfield=self.bitfield)
 
     def peer_requests_piece(self, request: Request, peer: Peer) -> None:

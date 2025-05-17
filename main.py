@@ -96,9 +96,6 @@ class Run(object):
                 self.peers_manager.add_peers(new_peers)
                 prev_time_refresh_tracker = time.monotonic()
 
-            if self.pieces_manager.outstanding_requests > MAX_OUTSTANDING_REQUESTS:
-                continue
-
             # if there's no one can give us data then we wait and infinitely loop
             if not self.peers_manager.has_unchoked_peers():
                 time.sleep(SLEEP_FOR_NO_UNCHOKED)
@@ -113,6 +110,10 @@ class Run(object):
             # We go through every piece for the torrent file (based on what was inside the torrent file provided by the user)
             if not seeding:
                 for index in self.pieces_manager.enumerate_piece_indices_rarest_first():
+
+                    # Don't send more than the maximum number of outstanding requests
+                    if self.pieces_manager.outstanding_requests > MAX_OUTSTANDING_REQUESTS:
+                        continue
                     
                     # If we have all the blocks for this piece, we can skip it
                     # and move on to the next piece
