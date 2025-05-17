@@ -2,13 +2,15 @@
 
 import time
 
+from piece import Piece
+
 __author__ = 'alexisgallepe'
 
 import socket
 import struct
 from pubsub import pub
 import logging
-import message
+from message import Handshake, Interested, KeepAlive, Message, MessageDispatcher, Request, UnChoke, WrongMessageException
 import time
 import math
 
@@ -94,8 +96,10 @@ class Peer(object):
         self.healthy = True
         return True
 
-    def send_to_peer(self, msg):
+    def send_to_peer(self, msg: bytes | Message):
         try:
+            if isinstance(msg, Message):
+                msg = msg.to_bytes()
             self.socket.send(msg)
             self.last_call = time.time()
         except Exception as e:
@@ -144,8 +148,7 @@ class Peer(object):
         self.state['peer_interested'] = True
 
         if self.am_choking():
-            unchoke = message.UnChoke().to_bytes()
-            self.send_to_peer(unchoke)
+            self.send_to_peer(UnChoke())
 
     def handle_not_interested(self):
         logging.debug('handle_not_interested - %s' % self.ip)
@@ -168,8 +171,7 @@ class Peer(object):
         # If they are choking us (aka we're not getting data from them),
         # and we are not interested in them
         if self.is_choking() and not self.state['am_interested']:
-            interested = message.Interested().to_bytes()
-            self.send_to_peer(interested)
+            self.send_to_peer(Interested())
             self.state['am_interested'] = True
 
         pub.sendMessage('PeersManager.UpdatePeersBitfield', peer=self, piece_index=have.piece_index)
@@ -182,13 +184,13 @@ class Peer(object):
         self.bitfield = bitfield.bitfield
 
         if self.is_choking() and not self.state['am_interested']:
-            interested = message.Interested().to_bytes()
+            interested = Interested().to_bytes()
             self.send_to_peer(interested)
             self.state['am_interested'] = True
 
         pub.sendMessage('PeersManager.UpdatePeersBitfield', peer=self, bit_field=self.bitfield)
 
-    def handle_request(self, request: message.Request):
+    def handle_request(self, request: Request):
         """
         :type request: message.Request
         """
@@ -198,7 +200,7 @@ class Peer(object):
             # NOTE: by shounak, track upload when sending pieces
             self.update_upload_stats(len(request.to_bytes()))
 
-    def handle_piece(self, message: message.Piece):
+    def handle_piece(self, message: Piece): 
         """
         :type message: message.Piece
         """
@@ -214,7 +216,7 @@ class Peer(object):
 
     def _handle_handshake(self):
         try:
-            handshake_message = message.Handshake.from_bytes(self.read_buffer)
+            handshake_message = Handshake.from_bytes(self.read_buffer)
             self.has_handshaked = True
             self.read_buffer = self.read_buffer[handshake_message.total_length:]
             logging.debug('handle_handshake - %s' % self.ip)
@@ -228,9 +230,9 @@ class Peer(object):
 
     def _handle_keep_alive(self):
         try:
-            keep_alive = message.KeepAlive.from_bytes(self.read_buffer)
+            keep_alive = KeepAlive.from_bytes(self.read_buffer)
             logging.debug('handle_keep_alive - %s' % self.ip)
-        except message.WrongMessageException:
+        except WrongMessageException:
             return False
         except Exception:
             logging.exception("Error KeepALive, (need at least 4 bytes : {})".format(len(self.read_buffer)))
@@ -254,10 +256,10 @@ class Peer(object):
                 self.read_buffer = self.read_buffer[total_length:]
 
             try:
-                received_message = message.MessageDispatcher(payload).dispatch()
+                received_message = MessageDispatcher(payload).dispatch()
                 if received_message:
                     yield received_message
-            except message.WrongMessageException as e:
+            except WrongMessageException as e:
                 logging.exception(e.__str__())
 
     def update_upload_stats(self, bytes_sent: int) -> None:

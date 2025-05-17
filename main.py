@@ -126,8 +126,7 @@ class Run(object):
                     continue
 
                 piece_index, block_offset, block_length = data
-                piece_data = Request(piece_index, block_offset, block_length).to_bytes()
-                peer.send_to_peer(piece_data)
+                peer.send_to_peer(Request(piece_index, block_offset, block_length))
 
             self.display_progression()
             time.sleep(0.1)

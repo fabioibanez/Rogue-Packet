@@ -70,23 +70,13 @@ class Piece(object):
             if block.state == BlockState.PENDING and (time.time() - block.last_seen) > 5:
                 self.blocks[i] = Block()
 
-    def set_data(self, piece_offset: int, data: bytes):
-        if self.is_full: return
-
-        start_index = piece_offset // BLOCK_SIZE
-        end_index = (piece_offset + len(data)) // BLOCK_SIZE
-        offset = piece_offset
-
-        for block_index in range(start_index, end_index):
-            block = self.blocks[block_index]
-            chunk = data[offset:offset + block.block_size]
-            offset += block.block_size
-
-            if block.state == BlockState.FULL: continue
-
-            block.data = chunk
-            if len(chunk) == block.block_size:
-                block.state = BlockState.FULL
+    def set_block(self, piece_offset: int, data: bytes):
+        block_index = piece_offset // BLOCK_SIZE
+        block = self.blocks[block_index]
+        if block.state == BlockState.FULL: return
+        if len(data) != block.block_size: return
+        block.data = data
+        block.state = BlockState.FULL
 
     def get_block(self, block_offset: int, block_length: int) -> bytes:
         return self.raw_data[block_offset:block_length]
@@ -107,6 +97,7 @@ class Piece(object):
         """
         Attempts to commit the piece on disk if it is complete.
         This will verify the piece's hash and set the piece as full if it is valid.
+        If the hash is invalid, the piece will be reset.
 
         @param remote: Whether to write the piece to disk and broadcast a HAVE message if it was completed
         @return: True if the piece was committed, False otherwise

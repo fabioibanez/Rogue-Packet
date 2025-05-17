@@ -30,7 +30,7 @@ class PiecesManager:
         if self.pieces[piece_index].is_full:
             return
 
-        self.pieces[piece_index].set_data(piece_offset, piece_data)
+        self.pieces[piece_index].set_block(piece_offset, piece_data)
         if self.pieces[piece_index].try_commit():
             self.update_bitfield(piece_index)
 
@@ -137,7 +137,11 @@ class PiecesManager:
                 except (IOError, FileNotFoundError):
                     break
             else:
-                piece.set_data(0, piece_data)
+                offset = 0
+                for block in piece.blocks:
+                    piece.set_block(offset, bytes(piece_data[offset:offset + block.block_size]))
+                    offset += block.block_size
+                
                 if piece.try_commit(remote=False):
                     self.update_bitfield(piece.piece_index)
     
