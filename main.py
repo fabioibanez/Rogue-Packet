@@ -71,12 +71,15 @@ class Run(object):
         prev_time_refresh_tracker = time.monotonic()
 
         # While we haven't finished downloading the file
-        while not self.pieces_manager.all_pieces_completed(): 
+        while True: 
+            seeding = self.pieces_manager.all_pieces_completed()
+            if seeding and not self.seed_after_download:
+                break
 
             # updates the unchoked peers state in the PeersManager and sends the unchoke message to the peers
             delta_regular_unchoking: float = time.monotonic() - prev_time_regular_unchoking
             if delta_regular_unchoking >= REGULAR_UNCHOKE_INTERVAL:
-                self.peers_manager.update_unchoked_regular_peers()        
+                self.peers_manager.update_unchoked_regular_peers(seed_mode=seeding)        
                 prev_time_regular_unchoking = time.monotonic()
             
             # updates the optimistic unchoked peers state in the PeersManager and sends the unchoke message to the peers
@@ -104,57 +107,44 @@ class Run(object):
                 logging.info("\033[1;32m[FOUND UNCHOKED] Found unchoked peers with pieces that we need\033[0m")
             
             # We go through every piece for the torrent file (based on what was inside the torrent file provided by the user)
-            for index in self.pieces_manager.enumerate_piece_indices_rarest_first():
-                
-                # If we have all the blocks for this piece, we can skip it
-                # and move on to the next piece
-                if self.pieces_manager.pieces[index].is_full:
-                    continue
-                
-                # If we're here, we DON"T have all the blocks for this piece
-                # We need to ask a peer for a block of this piece
-                peer = self.peers_manager.get_random_peer_having_piece(index)
+            if not seeding:
+                for index in self.pieces_manager.enumerate_piece_indices_rarest_first():
+                    
+                    # If we have all the blocks for this piece, we can skip it
+                    # and move on to the next piece
+                    if self.pieces_manager.pieces[index].is_full:
+                        continue
+                    
+                    # If we're here, we DON"T have all the blocks for this piece
+                    # We need to ask a peer for a block of this piece
+                    peer = self.peers_manager.get_random_peer_having_piece(index)
 
-                # If we didn't find any such peer that has the piece, we try again
-                if not peer:
-                    if self.verbose:
-                        print(f"[DOWNLOAD - {index}] No peer found for piece", end="")
-                    continue
-                else:
-                    if self.verbose:
-                        print(f"[DOWNLOAD - {index}] Peer found.", end="")
-                
-                # If I request a block from someone and I haven't received it from them,
-                # they're fucking lackadaisical and I don't want to be their friend anymore
-                self.pieces_manager.pieces[index].update_block_status()
-                
-                # Gets an empty block for the piece
-                data = self.pieces_manager.pieces[index].get_empty_block()
-                if not data:
-                    continue
+                    # If we didn't find any such peer that has the piece, we try again
+                    if not peer:
+                        if self.verbose:
+                            print(f"[DOWNLOAD - {index}] No peer found for piece", end="")
+                        continue
+                    else:
+                        if self.verbose:
+                            print(f"[DOWNLOAD - {index}] Peer found.", end="")
+                    
+                    # If I request a block from someone and I haven't received it from them,
+                    # they're fucking lackadaisical and I don't want to be their friend anymore
+                    self.pieces_manager.pieces[index].update_block_status()
+                    
+                    # Gets an empty block for the piece
+                    data = self.pieces_manager.pieces[index].get_empty_block()
+                    if not data:
+                        continue
 
-                piece_index, block_offset, block_length = data
-                peer.send_to_peer(Request(piece_index, block_offset, block_length))
+                    piece_index, block_offset, block_length = data
+                    peer.send_to_peer(Request(piece_index, block_offset, block_length))
 
             self.display_progression()
             time.sleep(0.1)
 
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
-
-        # If the user wants to seed after downloading, we continue to seed
-        # with a modified unchoking algorithm that prefers peers with a higher upload rate
-        if self.seed_after_download:
-            logging.info("Download complete. Continuing to seed...")
-            try:
-                while True:
-                    delta_regular_unchoking: float = time.monotonic() - prev_time_regular_unchoking
-                    if delta_regular_unchoking >= REGULAR_UNCHOKE_INTERVAL:
-                        self.peers_manager.update_unchoked_regular_peers(seed_mode=True)        
-                        prev_time_regular_unchoking = time.monotonic()
-                    time.sleep(0.1)
-            except KeyboardInterrupt:
-                logging.info("Seeding stopped...")
 
         self._exit_threads()
 
