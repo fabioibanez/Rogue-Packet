@@ -473,7 +473,7 @@ class BitField(Message):
         if message_id != cls.message_id:
             raise WrongMessageException("Not a BitField message")
 
-        raw_bitfield, = payload[5:5 + bitfield_length]
+        raw_bitfield = payload[5:5 + bitfield_length]
         return BitField(raw_bitfield)
 
 
