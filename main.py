@@ -97,7 +97,7 @@ class Run(object):
                 logging.info("\033[1;32m[FOUND UNCHOKED] Found unchoked peers with pieces that we need\033[0m")
             
             # We go through every piece for the torrent file (based on what was inside the torrent file provided by the user)
-            for index in self.peers_manager.enumerate_piece_indices_rarest_first():
+            for index in self.pieces_manager.enumerate_piece_indices_rarest_first():
                 
                 # If we have all the blocks for this piece, we can skip it
                 # and move on to the next piece
