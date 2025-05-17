@@ -16,6 +16,7 @@ from message import BitField, Choke, Handshake, Have, Interested, KeepAlive, Mes
 import time
 import math
 
+REQUEST_TIMEOUT: float = 2.0
 
 def ema(series: dict[float, int], time_window: float) -> float:
     now = time.monotonic()
@@ -28,6 +29,7 @@ def ema(series: dict[float, int], time_window: float) -> float:
         total_weight += w
     # this + 1 is a hack that adds an artificial datapoint now
     return weighted_sum / (total_weight + 1)
+
 class PeerStats:
     def __init__(self, time_window: float = 20.0):
         self.bytes_uploaded: int = 0
@@ -36,6 +38,7 @@ class PeerStats:
         self.time_window = time_window  # in seconds
         self.bytes_received_over_time: dict[float, int] = {}
         self.bytes_sent_over_time: dict[float, int] = {}
+        self.request_log: dict[float, Request] = {}
 
     def update_upload(self, bytes_sent: int) -> None:
         """
@@ -73,7 +76,6 @@ class Peer(object):
     bitfield: BitArray
 
     def __init__(self, number_of_pieces: int, ip: str, port: int=6881):
-        self.last_call = 0.0
         self.has_handshaked = False
         self.healthy = False
         self.read_buffer: bytes = b''
@@ -114,7 +116,6 @@ class Peer(object):
             logging.info(f"Sending {msg.__class__.__name__} message to peer {self}")
             encoded = msg.to_bytes()
             self.socket.send(encoded)
-            self.last_call = time.time()
         except Exception as e:
             self.healthy = False
             logging.error(f"Failed to send to peer {self} : {str(e)}")

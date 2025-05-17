@@ -2,7 +2,9 @@
 
 __author__ = 'alexisgallepe'
 
+from dataclasses import dataclass
 import logging
+import time
 from typing import TypeAlias
 from bitstring import BitArray
 from message import BitField, Interested, NotInterested, PieceMessage, Request
@@ -11,11 +13,27 @@ from piece import Piece, PieceFileInfo
 from pubsub import pub
 from torrent import Torrent
 
+REQUEST_TIMEOUT: float = 2.0
+
+@dataclass(frozen=True)
+class OutstandingRequest:
+    piece_index: int
+    piece_offset: int
+    timestamp: float
+
+    def expired(self, msg: PieceMessage | None = None) -> bool:
+        if time.monotonic() - self.timestamp > REQUEST_TIMEOUT:
+            return True
+        if msg is not None and msg.piece_index == self.piece_index and msg.piece_offset == self.piece_offset:
+            return True
+        return False
+
 class PiecesManager:
     def __init__(self, torrent: Torrent):
         self.torrent = torrent
         self.bitfield = BitArray(self.torrent.number_of_pieces)
         self.pieces = self._generate_pieces()
+        self._outstanding_requests: list[OutstandingRequest] = []
 
         file_info = self._generate_file_info()
         for info in file_info:
@@ -29,6 +47,13 @@ class PiecesManager:
         pub.subscribe(self.peer_requests_piece, 'PiecesManager.PieceRequested')
         pub.subscribe(self.update_peers_bitfield, 'PiecesManager.UpdatePeersBitfield')
 
+    def log_request(self, request: Request) -> None:
+        self._outstanding_requests.append(OutstandingRequest(request.piece_index, request.piece_offset, time.monotonic()))
+
+    @property
+    def outstanding_requests(self) -> int:
+        return sum(1 for req in self._outstanding_requests if not req.expired())
+
     def send_bitfield(self, peer: Peer) -> None:
         peer.send_to_peer(BitField(self.bitfield))
 
@@ -40,6 +65,9 @@ class PiecesManager:
             return
         
         peer.stats.update_download(len(msg.block))
+
+        # Remove any expired requests
+        self._outstanding_requests = [req for req in self._outstanding_requests if not req.expired(msg)]
 
         piece = self.pieces[msg.piece_index]
         piece.set_block(msg.piece_offset, msg.block)

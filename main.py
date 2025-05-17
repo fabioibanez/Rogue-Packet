@@ -22,6 +22,7 @@ NO_PROGRESS_YET_SENTINEL: int = -1
 REGULAR_UNCHOKE_INTERVAL: int = 10
 OPTIMISTIC_UNCHOKE_INTERVAL: int = 30
 REFRESH_TRACKER_INTERVAL: int = 60
+MAX_OUTSTANDING_REQUESTS: int = 10
 
 class Run(object):
     percentage_completed = NO_PROGRESS_YET_SENTINEL
@@ -95,6 +96,9 @@ class Run(object):
                 self.peers_manager.add_peers(new_peers)
                 prev_time_refresh_tracker = time.monotonic()
 
+            if self.pieces_manager.outstanding_requests > MAX_OUTSTANDING_REQUESTS:
+                continue
+
             # if there's no one can give us data then we wait and infinitely loop
             if not self.peers_manager.has_unchoked_peers():
                 time.sleep(SLEEP_FOR_NO_UNCHOKED)
@@ -138,7 +142,9 @@ class Run(object):
                         continue
 
                     piece_index, block_offset, block_length = data
-                    peer.send_to_peer(Request(piece_index, block_offset, block_length))
+                    request = Request(piece_index, block_offset, block_length)
+                    self.pieces_manager.log_request(request)
+                    peer.send_to_peer(request)
 
             self.display_progression()
             time.sleep(0.1)
