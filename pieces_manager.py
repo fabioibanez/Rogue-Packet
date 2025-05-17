@@ -74,7 +74,7 @@ class PiecesManager:
         if piece.try_commit():
             self.bitfield[piece.piece_index] = 1
             piece.write_to_disk()
-            pub.sendMessage('PeersManager.BroadcastHave', piece_index=self.piece_index, bitfield=self.bitfield)
+            pub.sendMessage('PeersManager.BroadcastHave', piece_index=piece.piece_index, bitfield=self.bitfield)
 
     def peer_requests_piece(self, request: Request, peer: Peer) -> None:
         # If we've completed all pieces, we'll give data to anyone who requests it!
