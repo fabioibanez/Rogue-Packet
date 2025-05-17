@@ -138,14 +138,14 @@ class PiecesManager:
                 continue
 
             # Read all blocks for this piece from disk
-            piece_data = bytearray()
+            piece_data = b''
             for info in sorted(piece.file_info, key=lambda x: x.piece_offset):
                 try:
                     with open(info.path, 'rb') as f:
                         f.seek(info.file_offset)
                         data = f.read(info.length)
                         if len(data) == info.length:
-                            piece_data.extend(data)
+                            piece_data += data
                         else:
                             break
                 except (IOError, FileNotFoundError):
@@ -153,7 +153,7 @@ class PiecesManager:
             else:
                 offset = 0
                 for block in piece.blocks:
-                    piece.set_block(offset, bytes(piece_data[offset:offset + block.block_size]))
+                    piece.set_block(offset, piece_data[offset:offset + block.block_size])
                     offset += block.block_size
                 
                 if piece.try_commit(remote=False):
