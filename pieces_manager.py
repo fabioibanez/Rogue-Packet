@@ -57,7 +57,7 @@ class PiecesManager:
 
         peer.send_to_peer(PieceMessage(request.block_length, request.piece_index, request.piece_offset, block))
         peer.stats.update_upload(len(block))
-        logging.info(f"Sent piece index {request.piece_index} (bytes {request.piece_offset + request.block_length}) to peer {peer}")
+        logging.info(f"Sent piece index {request.piece_index} (bytes {request.piece_offset}-{request.piece_offset + request.block_length}) to peer {peer}")
 
     def all_pieces_completed(self) -> bool:
         for piece in self.pieces:

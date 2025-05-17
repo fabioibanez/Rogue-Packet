@@ -115,11 +115,11 @@ class PeersManager(Thread):
         """
         return sorted(range(len(self.peers_by_piece)), key=lambda idx: len(self.peers_by_piece[idx]))
 
-    def get_random_peer_having_piece(self, index) -> Peer | None:
+    def get_random_peer_having_piece(self, piece_index: int) -> Peer | None:
         ready_peers = []
 
         for peer in self.peers:
-            if peer.is_eligible() and peer.is_unchoked() and peer.am_interested() and peer.has_piece(index):
+            if peer.is_eligible() and peer.is_unchoked() and peer.am_interested() and peer.has_piece(piece_index):
                 ready_peers.append(peer)
 
         # TODO: Select peer in ready list that has had highest historical upload bandwidth to us

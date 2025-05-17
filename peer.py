@@ -12,7 +12,7 @@ import socket
 import struct
 from pubsub import pub
 import logging
-from message import Choke, Handshake, Interested, KeepAlive, Message, MessageDispatcher, NotInterested, Request, UnChoke, WrongMessageException
+from message import BitField, Choke, Handshake, Interested, KeepAlive, Message, MessageDispatcher, NotInterested, Request, UnChoke, WrongMessageException
 import time
 import math
 
@@ -69,6 +69,9 @@ class PeerStats:
 ##################
 
 class Peer(object):
+
+    bitfield: BitArray
+
     def __init__(self, number_of_pieces: int, ip: str, port: int=6881):
         self.last_call = 0.0
         self.has_handshaked = False
@@ -113,7 +116,7 @@ class Peer(object):
             self.last_call = time.time()
         except Exception as e:
             self.healthy = False
-            logging.error("Failed to send to peer : %s" % e.__str__())
+            logging.error(f"Failed to send to peer {self} : {str(e)}")
             return
         
         if isinstance(msg, UnChoke): self.state['am_choking'] = False
@@ -125,8 +128,8 @@ class Peer(object):
         now = time.time()
         return (now - self.last_call) > 0.2
 
-    def has_piece(self, index):
-        return self.bitfield[index]
+    def has_piece(self, piece_index: int):
+        return self.bitfield[piece_index]
 
     def am_choking(self):
         return self.state['am_choking']
@@ -189,12 +192,12 @@ class Peer(object):
 
         pub.sendMessage('PeersManager.UpdatePeersBitfield', peer=self, piece_index=have.piece_index)
 
-    def handle_bitfield(self, bitfield):
+    def handle_bitfield(self, bitfield: BitField):
         """
         :type bitfield: message.BitField
         """
         logging.debug('handle_bitfield - %s - %s' % (self.ip, bitfield.bitfield))
-        self.bitfield = bitfield.bitfield
+        self.bitfield = BitArray(bitfield.bitfield)
 
         if self.is_choking() and not self.state['am_interested']:
             interested = Interested()
@@ -215,7 +218,7 @@ class Peer(object):
         """
         :type message: message.Piece
         """
-        pub.sendMessage('PiecesManager.PieceArrived', piece=message, peer=self)
+        pub.sendMessage('PiecesManager.PieceArrived', msg=message, peer=self)
 
     def handle_cancel(self):
         logging.debug('handle_cancel - %s' % self.ip)
