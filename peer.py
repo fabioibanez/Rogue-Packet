@@ -204,7 +204,7 @@ class Peer(object):
         :type bitfield: message.BitField
         """
         logging.debug('handle_bitfield - %s - %s' % (self.ip, bitfield.bitfield))
-        self.bitfield = BitArray(bitfield.bitfield)
+        # Note: PiecesManager will set the peer's bitfield (taking into account the correct length of the bitfield)
         pub.sendMessage('PiecesManager.UpdatePeersBitfield', peer=self, bitfield=self.bitfield)
 
     def handle_request(self, request: Request):

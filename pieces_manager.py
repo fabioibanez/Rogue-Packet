@@ -114,6 +114,8 @@ class PiecesManager:
                 peer.send_to_peer(Interested())
         
         if bitfield is not None:
+            bitfield = bitfield[:len(self.bitfield)]
+            peer.bitfield = bitfield
             for piece_index in range(len(bitfield)):
                 if bitfield[piece_index] == 1:
                     self.update_peers_bitfield(peer, piece_index=piece_index)
