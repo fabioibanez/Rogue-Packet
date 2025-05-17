@@ -9,8 +9,10 @@ import time
 import logging
 
 from enum import Enum
+from typing import TYPE_CHECKING
 
-from peer import Peer
+if TYPE_CHECKING:
+    from peer import Peer
 
 BLOCK_SIZE = 2 ** 14
 
@@ -62,7 +64,7 @@ class Piece(object):
         self.raw_data: bytes = b''
         self.number_of_blocks: int = int(math.ceil(float(piece_size) / BLOCK_SIZE))
         self.blocks: list[Block] = []
-        self.peers: list[Peer] = [] # Peers who have this piece
+        self.peers: list['Peer'] = [] # Peers who have this piece
 
         self._init_blocks()
 
