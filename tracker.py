@@ -14,6 +14,7 @@ import logging
 from bcoding import bdecode
 import socket
 from urllib.parse import urlparse
+import requests
 
 MAX_PEERS_TRY_CONNECT = 30
 MAX_PEERS_CONNECTED = 8
@@ -34,6 +35,14 @@ class Tracker(object):
         self.torrent = torrent
         self.connected_peers: set[Peer] = set()
         self.sock_addrs: set[SockAddr] = set()
+
+        # Get local IP address
+        self.local_ip: str | None = None
+        try:
+            self.local_ip = requests.get('https://api.ipify.org').text
+            logging.info(f"Local IP address: {self.local_ip}")
+        except Exception as e:
+            logging.exception(f"Error getting local IP address: {str(e)}")
 
     def get_peers_from_trackers(self, existing_peers: list[Peer] = []):
         self.sock_addrs.clear()
@@ -72,6 +81,12 @@ class Tracker(object):
             if len(self.connected_peers) >= MAX_PEERS_CONNECTED:
                 break
 
+            # If the peer is local, don't add it
+            if sock_addr.ip == self.local_ip:
+                logging.info(f"Peer {sock_addr.ip} is local, skipping")
+                continue
+
+            print(f"Existing peers list {existing_peers}")
             if any(peer.ip == sock_addr.ip and peer.port == sock_addr.port for peer in existing_peers):
                 continue
 

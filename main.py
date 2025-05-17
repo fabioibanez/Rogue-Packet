@@ -90,7 +90,7 @@ class Run(object):
 
             # updates the optimistic unchoked peers state in the PeersManager and sends the unchoke message to the peers
             delta_refresh_trackers: float = time.monotonic() - prev_time_refreshed
-            if delta_refresh_trackers >= 60:
+            if delta_refresh_trackers >= 15:
                 logging.info("\033[1;32m[REFRESHING THAT TRACKER]\033[0m")
                 new_peers = self.tracker.get_peers_from_trackers(self.peers_manager.peers)
                 self.peers_manager.add_peers(new_peers)

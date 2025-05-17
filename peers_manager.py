@@ -14,7 +14,6 @@ import random
 from typing import Iterable
 
 from bitstring import BitArray
-import requests
 
 
 from pieces_manager import PiecesManager
@@ -48,14 +47,6 @@ class PeersManager(Thread):
         self.torrent = torrent  # Torrent metadata
         self.pieces_manager = pieces_manager  # Manages pieces/blocks
         self.is_active: bool = True  # Controls the main thread loop
-
-        # Get local IP address
-        self.local_ip: str | None = None
-        try:
-            self.local_ip = requests.get('https://api.ipify.org').text
-            logging.info(f"Local IP address: {self.local_ip}")
-        except Exception as e:
-            logging.exception(f"Error getting local IP address: {str(e)}")
 
         # Initialize the choking logger
         self.choking_logger = PeerChokingLogger()
@@ -175,12 +166,6 @@ class PeersManager(Thread):
             self.remove_peer(peer)
 
         for peer in peers:
-
-            # If the peer is local, don't add it
-            if peer.ip == self.local_ip:
-                logging.info(f"Peer {peer.ip} is local, skipping")
-                self.remove_peer(peer)
-                continue
 
             # Send handshake to peer
             if not self._do_handshake(peer):
