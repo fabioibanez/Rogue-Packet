@@ -22,6 +22,7 @@ NO_PROGRESS_YET_SENTINEL: int = -1
 REGULAR_UNCHOKE_INTERVAL: int = 10
 OPTIMISTIC_UNCHOKE_INTERVAL: int = 30
 MAX_OUTSTANDING_REQUESTS: int = 5
+TRACKER_REFRESH_INTERVAL: int = 60
 
 class Run(object):
     percentage_completed = NO_PROGRESS_YET_SENTINEL
@@ -90,7 +91,7 @@ class Run(object):
 
             # updates the optimistic unchoked peers state in the PeersManager and sends the unchoke message to the peers
             delta_refresh_trackers: float = time.monotonic() - prev_time_refreshed
-            if delta_refresh_trackers >= 15:
+            if delta_refresh_trackers >= TRACKER_REFRESH_INTERVAL:
                 logging.info("\033[1;32m[REFRESHING THAT TRACKER]\033[0m")
                 new_peers = self.tracker.get_peers_from_trackers(self.peers_manager.peers)
                 self.peers_manager.add_peers(new_peers)

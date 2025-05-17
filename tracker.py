@@ -85,9 +85,7 @@ class Tracker(object):
                 logging.info(f"Peer {sock_addr.ip} is local, skipping")
                 continue
 
-            print(f"Existing peers list {existing_peers}")
             if any(peer.ip == sock_addr.ip and peer.port == sock_addr.port for peer in existing_peers):
-                print(f"Skipping {sock_addr.ip}")
                 continue
 
             new_peer = Peer(int(self.torrent.number_of_pieces), sock_addr.ip, sock_addr.port)
