@@ -168,6 +168,11 @@ class PeersManager(Thread):
         return False
 
     def add_peers(self, peers: Iterable[Peer]) -> None:
+        # Remove unhealthy peers (clean out the trash)
+        unhealthies = [peer for peer in peers if not peer.healthy]
+        for peer in unhealthies:
+            self.remove_peer(peer)
+
         for peer in peers:
 
             # If the peer is local, don't add it

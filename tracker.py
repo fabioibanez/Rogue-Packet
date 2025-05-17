@@ -36,7 +36,8 @@ class Tracker(object):
         self.sock_addrs: set[SockAddr] = set()
 
     def get_peers_from_trackers(self):
-        for i, tracker in enumerate(self.torrent.announce_list):
+        self.sock_addrs.clear()
+        for _, tracker in enumerate(self.torrent.announce_list):
             if len(self.sock_addrs) >= MAX_PEERS_TRY_CONNECT:
                 break
 
