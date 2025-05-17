@@ -252,6 +252,7 @@ class Handshake(Message):
         assert len(peer_id) < 255
         self.peer_id = peer_id
         self.info_hash = info_hash
+        self.total_length = self.payload_length
 
     def to_bytes(self) -> bytes:
         reserved = b'\x00' * 8
