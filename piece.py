@@ -70,12 +70,23 @@ class Piece(object):
             if block.state == BlockState.PENDING and (time.time() - block.last_seen) > 5:
                 self.blocks[i] = Block()
 
-    def set_block(self, offset: int, data: bytes):
-        index = offset // BLOCK_SIZE
+    def set_data(self, piece_offset: int, data: bytes):
+        if self.is_full: return
 
-        if not self.is_full and not self.blocks[index].state == BlockState.FULL:
-            self.blocks[index].data = data
-            self.blocks[index].state = BlockState.FULL
+        start_index = piece_offset // BLOCK_SIZE
+        end_index = (piece_offset + len(data)) // BLOCK_SIZE
+        offset = piece_offset
+
+        for block_index in range(start_index, end_index):
+            block = self.blocks[block_index]
+            chunk = data[offset:offset + block.block_size]
+            offset += block.block_size
+
+            if block.state == BlockState.FULL: continue
+
+            block.data = chunk
+            if len(chunk) == block.block_size:
+                block.state = BlockState.FULL
 
     def get_block(self, block_offset: int, block_length: int) -> bytes:
         return self.raw_data[block_offset:block_length]
@@ -92,15 +103,20 @@ class Piece(object):
 
         return None
 
-    def are_all_blocks_full(self):
-        for block in self.blocks:
-            if block.state == BlockState.FREE or block.state == BlockState.PENDING:
-                return False
+    def try_commit(self, remote: bool = True) -> bool:
+        """
+        Attempts to commit the piece on disk if it is complete.
+        This will verify the piece's hash and set the piece as full if it is valid.
 
-        return True
+        @param remote: Whether to write the piece to disk and broadcast a HAVE message if it was completed
+        @return: True if the piece was committed, False otherwise
+        """
+        if any(block.state != BlockState.FULL for block in self.blocks):
+            return False
 
-    def set_to_full(self):
         data = self._merge_blocks()
+        if not len(data) == self.piece_size:
+            return False
 
         if not self._valid_blocks(data):
             self._init_blocks()
@@ -108,17 +124,18 @@ class Piece(object):
 
         self.is_full = True
         self.raw_data = data
-        self._write_piece_on_disk()
-        pub.sendMessage('PiecesManager.PieceCompleted', piece_index=self.piece_index)
-        pub.sendMessage('PeersManager.BroadcastHave', piece_index=self.piece_index)
 
+        if remote:
+            self._write_piece_on_disk()
+            pub.sendMessage('PeersManager.BroadcastHave', piece_index=self.piece_index)
+            
         return True
 
     def _init_blocks(self) -> None:
         self.blocks = []
 
         if self.number_of_blocks > 1:
-            for i in range(self.number_of_blocks):
+            for _ in range(self.number_of_blocks):
                 self.blocks.append(Block())
 
             # Last block of last piece, the special block

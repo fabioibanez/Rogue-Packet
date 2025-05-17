@@ -6,7 +6,6 @@ __author__ = 'alexisgallepe'
 
 import socket
 import struct
-from bitstring import BitArray
 from pubsub import pub
 import logging
 import message
@@ -56,8 +55,6 @@ class PeerStats:
 ##################
 
 class Peer(object):
-    bitfield: BitArray
-
     def __init__(self, number_of_pieces: int, ip: str, port: int=6881):
         self.last_call = 0.0
         self.has_handshaked = False
@@ -67,7 +64,7 @@ class Peer(object):
         self.ip = ip
         self.port = port
         self.number_of_pieces = number_of_pieces
-        self.bitfield = BitArray(number_of_pieces)
+        self.bitfield = bytearray(number_of_pieces)
         self.state = {
             # NOTE: i am choking them
             'am_choking': True,

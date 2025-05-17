@@ -28,8 +28,6 @@ import logging
 import errno
 import socket
 
-from bitstring import BitArray
-
 ##################
 ##################
 ##################
@@ -93,7 +91,7 @@ class PeersManager(Thread):
         block_offset: int = request.block_offset
         block_length: int = request.block_length
 
-        block: bytes | None = self.pieces_manager.get_block(piece_index, block_offset, block_length)
+        block = self.pieces_manager.get_block(piece_index, block_offset, block_length)
         if block:
             piece = Piece(piece_index, block_offset, block_length, block).to_bytes()
             peer.send_to_peer(piece)
@@ -104,7 +102,7 @@ class PeersManager(Thread):
         self, 
         peer: Peer, 
         piece_index: int | None = None, 
-        bitfield: BitArray | None = None
+        bitfield: bytearray | None = None
     ) -> None:
         """
         Called when a peer updates their bit field, either via a `bitfield` or `have` message.

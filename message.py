@@ -4,7 +4,6 @@ from struct import pack, unpack
 import logging
 import random
 import socket
-from bitstring import BitArray
 
 # HandShake - String identifier of the protocol for BitTorrent V1
 HANDSHAKE_PSTR_V1 = b"BitTorrent protocol"
@@ -449,11 +448,10 @@ class BitField(Message):
     payload_length = -1
     total_length = -1
 
-    def __init__(self, bitfield: BitArray):
+    def __init__(self, bitfield: bytes):
         super(BitField, self).__init__()
         self.bitfield = bitfield
-        self.bitfield_as_bytes = bitfield.tobytes()
-        self.bitfield_length = len(self.bitfield_as_bytes)
+        self.bitfield_length = len(self.bitfield)
 
         self.payload_length = 1 + self.bitfield_length
         self.total_length = 4 + self.payload_length
@@ -462,7 +460,7 @@ class BitField(Message):
         return pack(">IB{}s".format(self.bitfield_length),
                     self.payload_length,
                     self.message_id,
-                    self.bitfield_as_bytes)
+                    self.bitfield)
 
     @classmethod
     def from_bytes(cls, payload: bytes) -> 'BitField':
@@ -472,10 +470,8 @@ class BitField(Message):
         if message_id != cls.message_id:
             raise WrongMessageException("Not a BitField message")
 
-        raw_bitfield, = unpack(">{}s".format(bitfield_length), payload[5:5 + bitfield_length])
-        bitfield = BitArray(bytes=bytes(raw_bitfield))
-
-        return BitField(bitfield)
+        raw_bitfield, = payload[5:5 + bitfield_length]
+        return BitField(raw_bitfield)
 
 
 class Request(Message):

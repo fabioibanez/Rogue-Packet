@@ -3,29 +3,23 @@
 __author__ = 'alexisgallepe'
 
 from piece import Piece, PieceFileInfo
-from bitstring import BitArray
 from pubsub import pub
 from torrent import Torrent
 
 class PiecesManager:
-    bitfield: BitArray
-
     def __init__(self, torrent: Torrent):
         self.torrent = torrent
-        self.number_of_pieces = torrent.number_of_pieces
-        self.bitfield = BitArray(self.number_of_pieces)
+        self.bitfield = bytearray(self.torrent.number_of_pieces)
         self.pieces = self._generate_pieces()
-        self.complete_pieces: int = 0
 
         file_info = self._generate_file_info()
         for info in file_info:
             self.pieces[info.piece_index].file_info.append(info)
 
+        self._read_from_disk()
+
         # events
         pub.subscribe(self.receive_block_piece, 'PiecesManager.Piece')
-        # NOTE: Once a piece is completed, we update the bitfield
-        # to indicate that the piece is completed
-        pub.subscribe(self.update_bitfield, 'PiecesManager.PieceCompleted')
 
     def update_bitfield(self, piece_index: int) -> None:
         self.bitfield[piece_index] = 1
@@ -36,11 +30,9 @@ class PiecesManager:
         if self.pieces[piece_index].is_full:
             return
 
-        self.pieces[piece_index].set_block(piece_offset, piece_data)
-
-        if self.pieces[piece_index].are_all_blocks_full():
-            if self.pieces[piece_index].set_to_full():
-                self.complete_pieces +=1
+        self.pieces[piece_index].set_data(piece_offset, piece_data)
+        if self.pieces[piece_index].try_commit():
+            self.update_bitfield(piece_index)
 
     def get_block(self, piece_index: int, block_offset: int, block_length: int) -> bytes | None:
         for piece in self.pieces:
@@ -58,6 +50,14 @@ class PiecesManager:
                 return False
 
         return True
+    
+    @property
+    def number_of_pieces(self) -> int:
+        return self.torrent.number_of_pieces
+
+    @property 
+    def complete_pieces(self) -> int:
+        return sum(1 for piece in self.pieces if piece.is_full)
 
     def _generate_pieces(self) -> list[Piece]:
         pieces = []
@@ -116,3 +116,29 @@ class PiecesManager:
 
                 infos.append(file)
         return infos
+
+    def _read_from_disk(self) -> None:
+        """Load and verify existing files to check which pieces are already complete."""
+        for piece in self.pieces:
+            if piece.is_full:
+                continue
+
+            # Read all blocks for this piece from disk
+            piece_data = bytearray()
+            for info in sorted(piece.file_info, key=lambda x: x.piece_offset):
+                try:
+                    with open(info.path, 'rb') as f:
+                        f.seek(info.file_offset)
+                        data = f.read(info.length)
+                        if len(data) == info.length:
+                            piece_data.extend(data)
+                        else:
+                            break
+                except (IOError, FileNotFoundError):
+                    break
+            else:
+                piece.set_data(0, piece_data)
+                if piece.try_commit(remote=False):
+                    self.update_bitfield(piece.piece_index)
+    
+    
