@@ -35,7 +35,7 @@ class Tracker(object):
         self.connected_peers: set[Peer] = set()
         self.sock_addrs: set[SockAddr] = set()
 
-    def get_peers_from_trackers(self):
+    def get_peers_from_trackers(self, existing_peers: list[Peer] = []):
         self.sock_addrs.clear()
         for _, tracker in enumerate(self.torrent.announce_list):
             if len(self.sock_addrs) >= MAX_PEERS_TRY_CONNECT:
@@ -58,16 +58,19 @@ class Tracker(object):
             else:
                 logging.error("unknown scheme for: %s " % tracker_url)
 
-        self.try_peer_connect()
+        self.try_peer_connect(existing_peers)
 
         return self.connected_peers
 
-    def try_peer_connect(self) -> None:
+    def try_peer_connect(self, existing_peers: list[Peer]) -> None:
         logging.info("Trying to connect to %d peer(s)" % len(self.sock_addrs))
 
         for sock_addr in self.sock_addrs:
             if len(self.connected_peers) >= MAX_PEERS_CONNECTED:
                 break
+
+            if any(peer.ip == sock_addr.ip and peer.port == sock_addr.port for peer in existing_peers):
+                continue
 
             new_peer = Peer(int(self.torrent.number_of_pieces), sock_addr.ip, sock_addr.port)
             if not new_peer.connect():

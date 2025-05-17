@@ -92,7 +92,7 @@ class Run(object):
             # Refresh the tracker
             delta_refresh_tracker: float = time.monotonic() - prev_time_refresh_tracker
             if delta_refresh_tracker >= REFRESH_TRACKER_INTERVAL:
-                new_peers = self.tracker.get_peers_from_trackers()
+                new_peers = self.tracker.get_peers_from_trackers(self.peers_manager.peers)
                 self.peers_manager.add_peers(new_peers)
                 prev_time_refresh_tracker = time.monotonic()
 

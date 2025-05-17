@@ -453,8 +453,9 @@ class BitField(Message):
 
     def __init__(self, bitfield: BitArray):
         super(BitField, self).__init__()
-        self.bitfield = bitfield.tobytes()
-        self.bitfield_length = len(self.bitfield)
+        self.bitfield = bitfield
+        self.bitfield_as_bytes = bitfield.tobytes()
+        self.bitfield_length = len(self.bitfield_as_bytes)
 
         self.payload_length = 1 + self.bitfield_length
         self.total_length = 4 + self.payload_length
@@ -463,7 +464,7 @@ class BitField(Message):
         return pack(">IB{}s".format(self.bitfield_length),
                     self.payload_length,
                     self.message_id,
-                    self.bitfield)
+                    self.bitfield_as_bytes)
 
     @classmethod
     def from_bytes(cls, payload: bytes) -> 'BitField':

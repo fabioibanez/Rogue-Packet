@@ -205,7 +205,7 @@ class Peer(object):
         """
         logging.debug('handle_bitfield - %s - %s' % (self.ip, bitfield.bitfield))
         # Note: PiecesManager will set the peer's bitfield (taking into account the correct length of the bitfield)
-        pub.sendMessage('PiecesManager.UpdatePeersBitfield', peer=self, bitfield=self.bitfield)
+        pub.sendMessage('PiecesManager.UpdatePeersBitfield', peer=self, bitfield=bitfield.bitfield)
 
     def handle_request(self, request: Request):
         """
