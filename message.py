@@ -474,7 +474,8 @@ class BitField(Message):
             raise WrongMessageException("Not a BitField message")
 
         raw_bitfield = payload[5:5 + bitfield_length]
-        return BitField(raw_bitfield)
+        bitfield = BitArray(bytes=raw_bitfield)
+        return BitField(bitfield)
 
 
 class Request(Message):

@@ -189,11 +189,11 @@ class Peer(object):
         self.bitfield = bitfield.bitfield
 
         if self.is_choking() and not self.state['am_interested']:
-            interested = Interested().to_bytes()
+            interested = Interested()
             self.send_to_peer(interested)
             self.state['am_interested'] = True
 
-        pub.sendMessage('PeersManager.UpdatePeersBitfield', peer=self, bit_field=self.bitfield)
+        pub.sendMessage('PeersManager.UpdatePeersBitfield', peer=self, bitfield=self.bitfield)
 
     def handle_request(self, request: Request):
         """
