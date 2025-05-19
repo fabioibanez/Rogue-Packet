@@ -123,7 +123,11 @@ class PeersManager(Thread):
             try:
                 conn, (ip, port) = server.accept()
                 peer = Peer(self.torrent.number_of_pieces, ip, port)
-                if peer.connect(conn): 
+
+                if any(peer.ip == ip for peer in self.peers):
+                    logging.info(f"Got redundant incoming connection from {ip}:{port}... closing.")
+                    conn.close()
+                elif peer.connect(conn): 
                     self.add_peers([peer])
             except BlockingIOError:
                 pass
