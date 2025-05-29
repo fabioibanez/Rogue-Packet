@@ -73,6 +73,20 @@ class PeersManager(Thread):
         # added for HAVE message sending
         pub.subscribe(self.broadcast_have, 'PeersManager.BroadcastHave')
 
+    @property
+    def max_collective_download_rate(self) -> float:
+        unchoked_peers = list(filter(lambda peer: peer.is_unchoked(), self.peers))
+        return sum(peer.stats.calculate_download_rate() for peer in unchoked_peers)
+
+    def confirm_send_to_peer(self, peer: peer.Peer) -> bool:
+        # We only send a packet to a peer with probability:
+        # (peer.download_rate / max_collective_download_rate)
+        denom = self.max_collective_download_rate
+        # NOTE: design decision, if 0 then just send since there's not proportional share
+        if denom == 0:
+            return True
+        return random.uniform(0, 1) < peer.stats.calculate_download_rate() / denom
+
     def broadcast_have(self, piece_index: int) -> None:
         have_message = message.Have(piece_index).to_bytes()
 
@@ -90,6 +104,10 @@ class PeersManager(Thread):
         if not request or not peer:
             logging.error("empty request/peer message")
         if peer.am_choking():
+            return 
+        
+        # proportional share
+        if not self.confirm_send_to_peer(peer=peer):
             return
 
         piece_index: int = request.piece_index

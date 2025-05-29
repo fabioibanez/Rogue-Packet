@@ -80,5 +80,7 @@ docs/_build/
 # PyBuilder
 target/
 
+# pptx
+*.pptx
 
 .vscode/

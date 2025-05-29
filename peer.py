@@ -13,6 +13,7 @@ import logging
 import message
 import time
 import math
+import random
 
 class PeerStats:
     def __init__(self, time_window: float = 20.0):
@@ -96,7 +97,6 @@ class Peer(object):
 
     def send_to_peer(self, msg):
         try:
-            # TODO: rolling average for self.throughput
             self.socket.send(msg)
             self.last_call = time.time()
         except Exception as e:
