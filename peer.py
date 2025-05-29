@@ -97,9 +97,6 @@ class Peer(object):
 
     def send_to_peer(self, msg):
         try:
-            # TODO: rolling average for self.throughput
-            if random.uniform(0, 1) < :
-                return
             self.socket.send(msg)
             self.last_call = time.time()
         except Exception as e:
