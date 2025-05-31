@@ -75,7 +75,7 @@ class PeersManager(Thread):
 
     @property
     def max_collective_download_rate(self) -> float:
-        unchoked_peers = list(filter(lambda peer: peer.is_unchoked(), self.peers))
+        unchoked_peers = [peer for peer in self.peers if peer.is_unchoked()]
         return sum(peer.stats.calculate_download_rate() for peer in unchoked_peers)
 
     def confirm_send_to_peer(self, peer: peer.Peer) -> bool:
