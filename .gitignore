@@ -5,7 +5,7 @@
 *.csv
 
 # config.yaml has sensitive information
-*.yaml
+config.yaml
 
 *.csv
 .DS_Store
