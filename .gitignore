@@ -1,6 +1,6 @@
 
 ### CUSTOM ADDED BY ROGUE PACKET PROJECTS ###
-torrents/
+# torrents/ # Pushing the torrents to github so we host them ourselves for the distributed testing
 *iso
 *.csv
 
@@ -9,9 +9,6 @@ torrents/
 pytorrent/
 *.png
 *.csv
-
-# Torrent files
-*.torrent
 
 # IntelliJ project files
 .idea
