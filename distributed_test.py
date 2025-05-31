@@ -142,13 +142,14 @@ class AWSManager:
         self.aws_config = aws_config
         self.region_clients = {}
     
+    # In the AWSManager class, change get_ec2_client method:
     def get_ec2_client(self, region):
         if region not in self.region_clients:
             self.region_clients[region] = boto3.client(
                 EC2_SERVICE_NAME,
-                region_name=region,
-                aws_access_key_id=self.aws_config['access_key'],
-                aws_secret_access_key=self.aws_config['secret_key']
+                region_name=region
+                # Remove aws_access_key_id and aws_secret_access_key
+                # IAM role provides credentials automatically
             )
         return self.region_clients[region]
     
