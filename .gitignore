@@ -4,6 +4,9 @@
 *iso
 *.csv
 
+# config.yaml has sensitive information
+*.yaml
+
 *.csv
 .DS_Store
 pytorrent/
