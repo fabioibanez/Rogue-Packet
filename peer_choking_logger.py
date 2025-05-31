@@ -1,18 +1,16 @@
 import csv
-import time
 from datetime import datetime
-from typing import List, Optional, Dict
-import peer
+import logging
+from peer import Peer
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-from pathlib import Path
 
 class PeerChokingLogger:
     def __init__(self, log_file: str = "peer_choking_logs.csv"):
         self.log_file = log_file
         # Dictionary to track cumulative stats per peer IP
-        self.peer_stats: Dict[str, Dict[str, int]] = {}
+        self.peer_stats: dict[str, dict[str, int]] = {}
         self._initialize_csv()
 
     def _initialize_csv(self):
@@ -33,7 +31,7 @@ class PeerChokingLogger:
         except FileExistsError:
             pass  # File already exists, no need to initialize
 
-    def _get_or_create_peer_stats(self, peer_ip: str) -> Dict[str, int]:
+    def _get_or_create_peer_stats(self, peer_ip: str) -> dict[str, int]:
         """Get or create stats for a peer IP"""
         if peer_ip not in self.peer_stats:
             self.peer_stats[peer_ip] = {
@@ -127,21 +125,25 @@ class PeerChokingLogger:
         except Exception as e:
             print(f"Error creating plots: {e}")
 
-    def log_regular_unchoke(self, peer: peer.Peer):
+    def log_regular_unchoke(self, peer: Peer):
+        logging.info("\033[1;36mUnchoked peer : %s\033[0m" % peer.ip)
         self._update_peer_stats('regular_unchoke', peer.ip)
         self._log_event('regular_unchoke', peer)
 
-    def log_regular_choke(self, peer: peer.Peer):
+    def log_regular_choke(self, peer: Peer):
+        logging.info("\033[1;36mChoked peer : %s\033[0m" % peer.ip)
         self._log_event('regular_choke', peer)
 
-    def log_optimistic_unchoke(self, peer: peer.Peer):
+    def log_optimistic_unchoke(self, peer: Peer):
+        logging.info("\033[1;35m[Optimistic unchoking] Unchoked peer : %s\033[0m" % peer.ip)
         self._update_peer_stats('optimistic_unchoke', peer.ip)
         self._log_event('optimistic_unchoke', peer)
 
-    def log_optimistic_choke(self, peer: peer.Peer):
+    def log_optimistic_choke(self, peer: Peer):
+        logging.info("\033[1;35m[Optimistic unchoking] Choke the old peer : %s\033[0m" % self.unchoked_optimistic_peer.ip)
         self._log_event('optimistic_choke', peer)
 
-    def _log_event(self, event_type: str, peer: peer.Peer):
+    def _log_event(self, event_type: str, peer: Peer):
         stats = self._get_or_create_peer_stats(peer.ip)
         with open(self.log_file, 'a', newline='') as f:
             writer = csv.writer(f)
