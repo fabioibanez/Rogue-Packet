@@ -279,7 +279,7 @@ class PeersManager(Thread):
     def update_unchoked_optimistic_peers(self) -> None:
         eligible_peers = [peer for peer in self.peers if peer.is_interested() and peer.am_choking()]
         if not eligible_peers:
-            logging.info("\033[1;35m[Optimistic unchoking] No eligible peers\033[0m")
+            logging.info(f"\033[1;35m[Optimistic unchoking] No eligible peers, peers are {self.peers}\033[0m")
             return
         
         # Choke the old optimistically unchoked peer
