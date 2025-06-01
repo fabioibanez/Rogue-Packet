@@ -17,7 +17,7 @@ def main():
     h2 = net.get('h2')
     h2.cmd('python myClient.py -i %s -m "hello world"' % h1.IP())
     
-    CLI(net)
+    # CLI(net)
     p1.terminate()
     net.stop()
 
