@@ -142,30 +142,59 @@ class AWSManager:
         self.aws_config = aws_config
         self.region_clients = {}
     
-    # In the AWSManager class, change get_ec2_client method:
     def get_ec2_client(self, region):
         if region not in self.region_clients:
             self.region_clients[region] = boto3.client(
                 EC2_SERVICE_NAME,
-                region_name=region
-                # Remove aws_access_key_id and aws_secret_access_key
-                # IAM role provides credentials automatically
+                region_name=region,
+                aws_access_key_id=self.aws_config['access_key'],
+                aws_secret_access_key=self.aws_config['secret_key']
             )
         return self.region_clients[region]
     
     def generate_user_data(self, github_repo, torrent_url, role, controller_ip, controller_port, instance_id):
         script = f"""#!/bin/bash
+# Debug: Log all commands and outputs
+set -x
+exec > >(tee -a /tmp/startup.log) 2>&1
+
+echo "=== Starting instance setup for {instance_id} ==="
+echo "Role: {role}"
+echo "Torrent URL: {torrent_url}"
+echo "Controller: {controller_ip}:{controller_port}"
+
 {UPDATE_CMD}
 {INSTALL_PACKAGES_CMD}
-git clone {github_repo} {BITTORRENT_PROJECT_DIR}
+git clone -b feat/aut-testbed {github_repo} {BITTORRENT_PROJECT_DIR}
 cd {BITTORRENT_PROJECT_DIR}
 {INSTALL_DEPS_CMD}
+
 mkdir -p {TORRENT_TEMP_DIR}
-curl -o {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} {torrent_url}
+
+echo "=== Downloading torrent file ==="
+echo "URL: {torrent_url}"
+curl -v -o {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} {torrent_url}
+
+echo "=== Torrent file info ==="
+ls -la {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}
+file {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}
+head -c 100 {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} | hexdump -C
+
 export BITTORRENT_ROLE="{role}"
 export INSTANCE_ID="{instance_id}"
 echo "{instance_id}" > {INSTANCE_ID_FILE}
+
+echo "=== Running BitTorrent client ==="
+echo "Command: python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
 python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
+
+echo "=== BitTorrent client finished ==="
+echo "Log file size: $(wc -l < {LOG_FILE_PATH}) lines"
+
+# Append startup log to main log for debugging
+echo "=== STARTUP LOG ===" >> {LOG_FILE_PATH}
+cat /tmp/startup.log >> {LOG_FILE_PATH}
+
 curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
 curl -X POST -H "{CONTENT_TYPE_JSON}" -d '{{"instance_id": "{instance_id}", "status": "{STATUS_COMPLETE}"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT}
 {SHUTDOWN_CMD}
@@ -258,16 +287,41 @@ class BitTorrentDeployer:
         # Start log server
         handler = self.log_server.start()
         print(f"Log server started on port {self.config.get_controller_port()}")
+        print(f"Controller IP: {self.controller_ip}")
         
         # Get torrent URL from GitHub
         torrent_url = self.config.get_bittorrent_config()['torrent_url']
-        print(f"Using torrent from {torrent_url}")
+        github_repo = self.config.get_bittorrent_config()['github_repo']
+        
+        print(f"\n=== Configuration ===")
+        print(f"GitHub repo: {github_repo}")
+        print(f"Torrent URL: {torrent_url}")
+        print(f"Command to be run on each instance: python3 -m main /tmp/torrents/file.torrent")
+        
+        # Test torrent URL accessibility
+        print(f"\n=== Testing torrent URL ===")
+        try:
+            import requests
+            response = requests.head(torrent_url)
+            print(f"Torrent URL status: {response.status_code}")
+            if response.status_code == 200:
+                print(f"✓ Torrent file accessible ({response.headers.get('content-length', 'unknown')} bytes)")
+            else:
+                print(f"✗ Torrent URL returned {response.status_code} - this will cause failures!")
+        except Exception as e:
+            print(f"✗ Could not test torrent URL: {e}")
         
         # Calculate total instance count
         for region in self.config.get_regions():
             self.total_instance_count += region['seeders'] + region['leechers']
         
+        print(f"\n=== Deployment Plan ===")
+        for region in self.config.get_regions():
+            print(f"Region {region['name']}: {region['seeders']} seeders, {region['leechers']} leechers")
+        print(f"Total instances: {self.total_instance_count}")
+        
         # Deploy instances
+        print(f"\n=== Launching Instances ===")
         with ThreadPoolExecutor() as executor:
             futures = []
             
@@ -283,36 +337,44 @@ class BitTorrentDeployer:
             for future in futures:
                 region_name, instance_ids = future.result()
                 self.region_instances[region_name] = instance_ids
+                print(f"✓ Launched {len(instance_ids)} instances in {region_name}")
         
-        print(f"Deployed {self.total_instance_count} instances across {len(self.config.get_regions())} regions")
+        print(f"✓ Deployed {self.total_instance_count} instances across {len(self.config.get_regions())} regions")
         
         # Wait for completion
-        print("Waiting for all instances to complete...")
+        print(f"\n=== Waiting for Completion ===")
+        print("Instances are now:")
+        print("1. Booting up (1-2 minutes)")
+        print("2. Installing dependencies (2-3 minutes)")
+        print("3. Running BitTorrent clients")
+        print("4. Sending logs back when complete")
+        print(f"Will wait up to {self.config.get_timeout_minutes()} minutes...")
+        
         completed = self.wait_for_completion(handler, self.config.get_timeout_minutes())
         
         if completed:
-            print("All instances completed successfully")
+            print("✓ All instances completed successfully")
         else:
-            print("Timeout reached, some instances may not have completed")
+            print("⚠ Timeout reached, some instances may not have completed")
         
         # Process logs
-        print("\nLog Summary:")
+        print(f"\n=== Log Summary ===")
         for instance_id, status in handler.completion_status.items():
             log_path = f"logs/{instance_id}.log"
             if os.path.exists(log_path):
-                print(f"{instance_id}: {status} (log collected)")
+                print(f"✓ {instance_id}: {status} (log collected)")
             else:
-                print(f"{instance_id}: {status} (no log collected)")
+                print(f"✗ {instance_id}: {status} (no log collected)")
         
         # Cleanup resources
-        print("\nTerminating instances...")
+        print(f"\n=== Cleanup ===")
         for region_name, instance_ids in self.region_instances.items():
             self.aws_manager.terminate_instances(region_name, instance_ids)
-            print(f"Terminated {len(instance_ids)} instances in {region_name}")
+            print(f"✓ Terminated {len(instance_ids)} instances in {region_name}")
         
         # Stop log server
         self.log_server.stop()
-        print("Log server stopped")
+        print("✓ Log server stopped")
         
         return handler.completion_status
 
