@@ -51,7 +51,6 @@ import base64
 import threading
 import json
 import boto3
-import cgi
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor
 
@@ -89,19 +88,34 @@ class LogHandler(BaseHTTPRequestHandler):
             self.end_headers()
     
     def _handle_logs(self):
-        form = cgi.FieldStorage(
-            fp=self.rfile,
-            headers=self.headers,
-            environ={'REQUEST_METHOD': 'POST'}
-        )
+        # Parse multipart form data without using deprecated cgi module
+        content_type = self.headers.get('Content-Type', '')
+        if not content_type.startswith('multipart/form-data'):
+            self.send_response(400)
+            self.end_headers()
+            return
         
-        instance_id = form.getvalue('instance_id')
-        fileitem = form['logfile']
+        # Simple multipart parsing for our specific use case
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length)
         
-        if fileitem.file:
+        # Extract boundary
+        boundary = content_type.split('boundary=')[1].encode()
+        parts = post_data.split(b'--' + boundary)
+        
+        instance_id = None
+        log_data = None
+        
+        for part in parts:
+            if b'name="instance_id"' in part:
+                instance_id = part.split(b'\r\n\r\n')[1].split(b'\r\n')[0].decode()
+            elif b'name="logfile"' in part:
+                log_data = part.split(b'\r\n\r\n', 1)[1].rsplit(b'\r\n', 1)[0]
+        
+        if instance_id and log_data:
             os.makedirs(self.logs_dir, exist_ok=True)
             with open(f"{self.logs_dir}/{instance_id}.log", 'wb') as f:
-                f.write(fileitem.file.read())
+                f.write(log_data)
         
         self.send_response(HTTP_OK)
         self.end_headers()
@@ -160,41 +174,142 @@ echo "=== Starting instance setup for {instance_id} ==="
 echo "Role: {role}"
 echo "Torrent URL: {torrent_url}"
 echo "Controller: {controller_ip}:{controller_port}"
+echo "Timestamp: $(date)"
 
+echo "=== System Update ==="
 {UPDATE_CMD}
+echo "System update completed with exit code: $?"
+
+echo "=== Installing System Packages ==="
 {INSTALL_PACKAGES_CMD}
+apt-get install -y python3-dev python3-venv build-essential
+echo "System packages installed with exit code: $?"
+
+echo "=== Python and pip versions ==="
+python3 --version
+pip3 --version
+
+echo "=== Cloning Repository ==="
 git clone -b feat/aut-testbed {github_repo} {BITTORRENT_PROJECT_DIR}
+echo "Git clone completed with exit code: $?"
+
 cd {BITTORRENT_PROJECT_DIR}
-{INSTALL_DEPS_CMD}
+echo "Current directory: $(pwd)"
+echo "Directory contents:"
+ls -la
+
+echo "=== Checking requirements.txt ==="
+if [ -f requirements.txt ]; then
+    echo "requirements.txt found:"
+    cat requirements.txt
+    echo "--- End of requirements.txt ---"
+else
+    echo "ERROR: requirements.txt not found!"
+    ls -la
+    exit 1
+fi
+
+echo "=== Installing Python Dependencies ==="
+# Update pip first
+python3 -m pip install --upgrade pip
+echo "pip upgrade completed with exit code: $?"
+
+# Install dependencies with verbose output and timeout
+python3 -m pip install -r requirements.txt --verbose --timeout 300
+PIP_EXIT_CODE=$?
+echo "pip install completed with exit code: $PIP_EXIT_CODE"
+
+if [ $PIP_EXIT_CODE -ne 0 ]; then
+    echo "ERROR: pip install failed!"
+    echo "Trying alternative installation methods..."
+    
+    # Try installing each package individually
+    echo "Installing packages individually:"
+    while IFS= read -r package; do
+        if [[ ! "$package" =~ ^[[:space:]]*# ]] && [[ -n "$package" ]]; then
+            echo "Installing: $package"
+            python3 -m pip install "$package" --verbose --timeout 300
+            echo "Exit code for $package: $?"
+        fi
+    done < requirements.txt
+fi
+
+echo "=== Installed packages ==="
+python3 -m pip list
 
 mkdir -p {TORRENT_TEMP_DIR}
 
 echo "=== Downloading torrent file ==="
 echo "URL: {torrent_url}"
-curl -v -o {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} {torrent_url}
+curl -L -v -o {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} {torrent_url}
+CURL_EXIT_CODE=$?
+echo "curl completed with exit code: $CURL_EXIT_CODE"
 
 echo "=== Torrent file info ==="
 ls -la {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}
 file {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}
+echo "File size: $(stat -c%s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}) bytes"
 head -c 100 {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} | hexdump -C
 
 export BITTORRENT_ROLE="{role}"
 export INSTANCE_ID="{instance_id}"
 echo "{instance_id}" > {INSTANCE_ID_FILE}
 
+echo "=== Environment Variables ==="
+echo "BITTORRENT_ROLE=$BITTORRENT_ROLE"
+echo "INSTANCE_ID=$INSTANCE_ID"
+
+echo "=== Testing Python imports ==="
+python3 -c "
+try:
+    import sys
+    print('Python path:', sys.path)
+    # Try importing common packages that might be in requirements.txt
+    test_imports = ['requests', 'bcoding', 'bitstring', 'bencode']
+    for pkg in test_imports:
+        try:
+            __import__(pkg)
+            print(f'✓ {pkg} import successful')
+        except ImportError as e:
+            print(f'✗ {pkg} import failed: {e}')
+except Exception as e:
+    print(f'Python test failed: {e}')
+"
+
 echo "=== Running BitTorrent client ==="
 echo "Command: python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
+echo "Working directory: $(pwd)"
+echo "main.py exists: $(test -f main.py && echo 'yes' || echo 'no')"
+
 python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
+BITTORRENT_EXIT_CODE=$?
+echo "BitTorrent client completed with exit code: $BITTORRENT_EXIT_CODE"
 
 echo "=== BitTorrent client finished ==="
 echo "Log file size: $(wc -l < {LOG_FILE_PATH}) lines"
+echo "Log file first 10 lines:"
+head -10 {LOG_FILE_PATH}
+echo "Log file last 10 lines:"
+tail -10 {LOG_FILE_PATH}
 
 # Append startup log to main log for debugging
+echo "" >> {LOG_FILE_PATH}
+echo "=======================================" >> {LOG_FILE_PATH}
 echo "=== STARTUP LOG ===" >> {LOG_FILE_PATH}
+echo "=======================================" >> {LOG_FILE_PATH}
 cat /tmp/startup.log >> {LOG_FILE_PATH}
 
+echo "=== Sending logs to controller ==="
 curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
+CURL_LOG_EXIT_CODE=$?
+echo "Log upload completed with exit code: $CURL_LOG_EXIT_CODE"
+
 curl -X POST -H "{CONTENT_TYPE_JSON}" -d '{{"instance_id": "{instance_id}", "status": "{STATUS_COMPLETE}"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT}
+CURL_COMPLETION_EXIT_CODE=$?
+echo "Completion notification sent with exit code: $CURL_COMPLETION_EXIT_CODE"
+
+echo "=== Instance setup completed ==="
+echo "Final timestamp: $(date)"
 {SHUTDOWN_CMD}
 """
         return base64.b64encode(script.encode()).decode()
