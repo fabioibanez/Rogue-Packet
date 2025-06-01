@@ -1,12 +1,19 @@
+#!/usr/bin/env python3
+"""
+BitTorrent Network Deployment Script with Programmatic AMI Lookup
+"""
+
 # Constants
 # File Paths and Names
 DEFAULT_CONFIG_PATH = "config.yaml"  # Used in Config and BitTorrentDeployer initialization
 LOGS_DIR = "logs"  # Directory for storing log files from instances
 TORRENT_TEMP_DIR = "/tmp/torrents"  # Directory for storing torrent files on instances
+SEED_TEMP_DIR = "/tmp/seed"  # Directory for storing seed files on instances
 BITTORRENT_PROJECT_DIR = "/tmp/bittorrent-project"  # Directory for cloning GitHub repo on instances
 LOG_FILE_PATH = "/tmp/bittorrent.log"  # Path to store BitTorrent client logs on instances
 INSTANCE_ID_FILE = "/tmp/instance_id.txt"  # File to store instance ID on instances
 TORRENT_FILENAME = "file.torrent"  # Default filename for downloaded torrent files
+SEED_FILENAME = "seed_file"  # Default filename for seed files
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Format for logging
 
 # API Endpoints
@@ -23,8 +30,13 @@ CONTENT_TYPE_JSON = "Content-Type: application/json"  # Content type header (use
 # AWS Constants
 DEFAULT_INSTANCE_TYPE = "t2.micro"  # Default EC2 instance type if not specified in config
 DEFAULT_REGION = "us-east-1"  # Default AWS region if not specified in config
-DEFAULT_AMI_UBUNTU = "ami-0123456789abcdef"  # Default Ubuntu AMI if not specified in config
 EC2_SERVICE_NAME = 'ec2'  # EC2 service name for boto3 (used in get_ec2_client)
+
+# AMI Constants
+UBUNTU_OWNER_ID = '099720109477'  # Canonical (Ubuntu) owner ID
+UBUNTU_AMI_NAME_PATTERN = 'ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*'  # Ubuntu 22.04 AMI name pattern
+AMI_ARCHITECTURE = 'x86_64'  # Required architecture for AMI
+AMI_STATE_AVAILABLE = 'available'  # Required AMI state
 
 # Timing Constants
 DEFAULT_TIMEOUT_MINUTES = 30  # Default timeout if not specified in config
@@ -44,9 +56,6 @@ ROLE_LEECHER = "leecher"  # Role identifier for leechers (used in deploy_region)
 
 # Status Constants
 STATUS_COMPLETE = "complete"  # Status indicating completion (used in generate_user_data)
-
-SEED_TEMP_DIR = "/tmp/seed_files"  # Directory for storing actual seed files on seeder instances
-SEED_FILENAME = "seed_file"  # Default filename for downloaded seed file
 
 # Color Constants for Terminal Output
 COLOR_RESET = '\033[0m'
@@ -228,14 +237,86 @@ class AWSManager:
     def __init__(self, aws_config):
         self.aws_config = aws_config
         self.region_clients = {}
+        self.region_amis = {}  # Cache for AMI IDs per region
     
     def get_ec2_client(self, region):
         if region not in self.region_clients:
             self.region_clients[region] = boto3.client(
                 EC2_SERVICE_NAME,
                 region_name=region,
+                aws_access_key_id=self.aws_config['access_key'],
+                aws_secret_access_key=self.aws_config['secret_key']
             )
         return self.region_clients[region]
+    
+    def get_latest_ubuntu_ami(self, region):
+        """Get latest Ubuntu 22.04 AMI for the specified region"""
+        if region in self.region_amis:
+            return self.region_amis[region], None
+        
+        try:
+            ec2_client = self.get_ec2_client(region)
+            
+            response = ec2_client.describe_images(
+                Owners=[UBUNTU_OWNER_ID],  # Canonical (Ubuntu)
+                Filters=[
+                    {
+                        'Name': 'name', 
+                        'Values': [UBUNTU_AMI_NAME_PATTERN]
+                    },
+                    {
+                        'Name': 'state', 
+                        'Values': [AMI_STATE_AVAILABLE]
+                    },
+                    {
+                        'Name': 'architecture',
+                        'Values': [AMI_ARCHITECTURE]
+                    }
+                ]
+            )
+            
+            if not response['Images']:
+                return None, f"No Ubuntu 22.04 AMIs found in {region}"
+            
+            # Sort by creation date and get the latest
+            latest_ami = sorted(
+                response['Images'], 
+                key=lambda x: x['CreationDate'], 
+                reverse=True
+            )[0]
+            
+            ami_info = {
+                'ami_id': latest_ami['ImageId'],
+                'name': latest_ami['Name'],
+                'creation_date': latest_ami['CreationDate'],
+                'description': latest_ami.get('Description', 'N/A')
+            }
+            
+            # Cache the result
+            self.region_amis[region] = ami_info
+            
+            return ami_info, None
+            
+        except Exception as e:
+            return None, f"Failed to lookup AMI in {region}: {str(e)}"
+    
+    def validate_ami_availability(self, region, ami_id):
+        """Validate that an AMI is available and accessible"""
+        try:
+            ec2_client = self.get_ec2_client(region)
+            response = ec2_client.describe_images(ImageIds=[ami_id])
+            
+            if not response['Images']:
+                return False, f"AMI {ami_id} not found in {region}"
+            
+            ami = response['Images'][0]
+            if ami['State'] != AMI_STATE_AVAILABLE:
+                return False, f"AMI {ami_id} is not available (state: {ami['State']})"
+            
+            return True, "AMI is available and accessible"
+            
+        except Exception as e:
+            return False, f"Error validating AMI {ami_id}: {str(e)}"
     
     def generate_user_data(self, github_repo, torrent_url, seed_fileurl, role, controller_ip, controller_port, instance_id):
         script = f"""#!/bin/bash
@@ -318,7 +399,7 @@ pip3 --version
 
 echo "=== Cloning Repository ==="
 send_log_update "Cloning repository from {github_repo}"
-git clone -b feat/aut-testbed {github_repo} {BITTORRENT_PROJECT_DIR}
+git clone -b feat/distribed {github_repo} {BITTORRENT_PROJECT_DIR}
 echo "Git clone completed with exit code: $?"
 send_log_update "Repository cloned successfully"
 
@@ -496,12 +577,12 @@ trap - EXIT TERM INT
 """
         return base64.b64encode(script.encode()).decode()
     
-    def launch_instance(self, region, user_data):
+    def launch_instance(self, region, user_data, ami_id):
         ec2_client = self.get_ec2_client(region)
         
         response = ec2_client.run_instances(
-            ImageId=self.aws_config['ami_id'],
-            InstanceType=self.aws_config['instance_type'],
+            ImageId=ami_id,
+            InstanceType=self.aws_config.get('instance_type', DEFAULT_INSTANCE_TYPE),
             MinCount=1,
             MaxCount=1,
             UserData=user_data,
@@ -607,7 +688,39 @@ class BitTorrentDeployer:
         response = requests.get(IP_API_URL)
         return response.text
     
-    def deploy_region(self, region_config, torrent_url, seed_fileurl):
+    def _lookup_and_validate_amis(self):
+        """Look up and validate AMIs for all regions"""
+        print(f"\n{COLOR_BOLD}=== AMI Lookup and Validation ==={COLOR_RESET}")
+        
+        region_ami_map = {}
+        all_regions = [region['name'] for region in self.config.get_regions()]
+        
+        for region_name in all_regions:
+            print(f"🔍 Looking up Ubuntu 22.04 AMI for {region_name}...")
+            
+            ami_info, error = self.aws_manager.get_latest_ubuntu_ami(region_name)
+            
+            if ami_info:
+                print(f"  {COLOR_GREEN}✓ Found AMI: {ami_info['ami_id']}{COLOR_RESET}")
+                print(f"    Name: {ami_info['name']}")
+                print(f"    Created: {ami_info['creation_date']}")
+                
+                # Validate AMI accessibility
+                is_valid, validation_msg = self.aws_manager.validate_ami_availability(region_name, ami_info['ami_id'])
+                if is_valid:
+                    print(f"    {COLOR_GREEN}✓ AMI validated and accessible{COLOR_RESET}")
+                    region_ami_map[region_name] = ami_info['ami_id']
+                else:
+                    print(f"    {COLOR_RED}✗ AMI validation failed: {validation_msg}{COLOR_RESET}")
+                    return None, f"AMI validation failed for {region_name}: {validation_msg}"
+            else:
+                print(f"  {COLOR_RED}✗ AMI lookup failed: {error}{COLOR_RESET}")
+                return None, f"AMI lookup failed for {region_name}: {error}"
+        
+        print(f"{COLOR_GREEN}✅ All AMIs validated successfully across {len(all_regions)} regions{COLOR_RESET}")
+        return region_ami_map, None
+    
+    def deploy_region(self, region_config, torrent_url, seed_fileurl, ami_id):
         region_name = region_config['name']
         instance_ids = []
         
@@ -624,7 +737,7 @@ class BitTorrentDeployer:
                 instance_id
             )
             
-            ec2_id = self.aws_manager.launch_instance(region_name, user_data)
+            ec2_id = self.aws_manager.launch_instance(region_name, user_data, ami_id)
             instance_ids.append(ec2_id)
         
         # Deploy leechers
@@ -640,7 +753,7 @@ class BitTorrentDeployer:
                 instance_id
             )
             
-            ec2_id = self.aws_manager.launch_instance(region_name, user_data)
+            ec2_id = self.aws_manager.launch_instance(region_name, user_data, ami_id)
             instance_ids.append(ec2_id)
         
         return region_name, instance_ids
@@ -664,9 +777,15 @@ class BitTorrentDeployer:
             print(f"{COLOR_BOLD}{COLOR_BLUE}💾 Logs Directory: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C at any time for graceful cleanup{COLOR_RESET}")
             
+            # Look up and validate AMIs for all regions
+            region_ami_map, ami_error = self._lookup_and_validate_amis()
+            if ami_error:
+                print(f"\n{COLOR_RED}💥 AMI validation failed: {ami_error}{COLOR_RESET}")
+                return {}
+            
             # Start log server
             self.handler = self.log_server.start()
-            print(f"{COLOR_GREEN}🌐 Log server started on port {self.config.get_controller_port()}{COLOR_RESET}")
+            print(f"\n{COLOR_GREEN}🌐 Log server started on port {self.config.get_controller_port()}{COLOR_RESET}")
             print(f"{COLOR_GREEN}🌍 Controller IP: {self.controller_ip}{COLOR_RESET}")
             
             # Get torrent URL from GitHub
@@ -711,7 +830,8 @@ class BitTorrentDeployer:
             
             print(f"\n{COLOR_BOLD}=== Deployment Plan ==={COLOR_RESET}")
             for region in self.config.get_regions():
-                print(f"🌍 Region {region['name']}: {COLOR_GREEN}{region['seeders']} seeders{COLOR_RESET}, {COLOR_BLUE}{region['leechers']} leechers{COLOR_RESET}")
+                ami_id = region_ami_map[region['name']]
+                print(f"🌍 Region {region['name']}: {COLOR_GREEN}{region['seeders']} seeders{COLOR_RESET}, {COLOR_BLUE}{region['leechers']} leechers{COLOR_RESET} (AMI: {ami_id})")
             print(f"📊 Total instances: {COLOR_BOLD}{self.total_instance_count}{COLOR_RESET}")
             
             # Deploy instances
@@ -720,12 +840,14 @@ class BitTorrentDeployer:
                 futures = []
                 
                 for region in self.config.get_regions():
+                    ami_id = region_ami_map[region['name']]
                     futures.append(
                         executor.submit(
                             self.deploy_region,
                             region,
                             torrent_url,
-                            seed_fileurl
+                            seed_fileurl,
+                            ami_id
                         )
                     )
                 
