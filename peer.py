@@ -15,6 +15,7 @@ import logging
 from message import BitField, Choke, Handshake, Have, Interested, KeepAlive, Message, MessageDispatcher, NotInterested, Request, UnChoke, WrongMessageException
 import time
 import math
+import random
 
 REQUEST_TIMEOUT: float = 2.0
 

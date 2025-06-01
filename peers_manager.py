@@ -54,6 +54,20 @@ class PeersManager(Thread):
         # Events
         pub.subscribe(self.broadcast_have, 'PeersManager.BroadcastHave')
 
+    @property
+    def max_collective_download_rate(self) -> float:
+        unchoked_peers = [peer for peer in self.peers if peer.is_unchoked()]
+        return sum(peer.stats.calculate_download_rate() for peer in unchoked_peers)
+
+    def confirm_send_to_peer(self, peer: peer.Peer) -> bool:
+        # We only send a packet to a peer with probability:
+        # (peer.download_rate / max_collective_download_rate)
+        denom = self.max_collective_download_rate
+        # NOTE: design decision, if 0 then just send since there's not proportional share
+        if denom == 0:
+            return True
+        return random.uniform(0, 1) < peer.stats.calculate_download_rate() / denom
+
     def broadcast_have(self, piece_index: int, bitfield: BitArray) -> None:
         have_message = Have(piece_index)
 
@@ -63,11 +77,11 @@ class PeersManager(Thread):
             if not peer.healthy: continue
             peer.send_to_peer(have_message)
             logging.info("Sent HAVE message for piece index {} to peer: {}".format(piece_index, peer.ip))
-
+            
             # If after completing a piece, the peer no longer has anything to offer, send a NOT INTERESTED message
             if peer.am_interested() and sum(~bitfield & peer.bitfield) == 0:
                 peer.send_to_peer(NotInterested())
-
+                
     def get_random_peer_having_piece(self, piece_index: int) -> Peer | None:
         ready_peers = []
 
