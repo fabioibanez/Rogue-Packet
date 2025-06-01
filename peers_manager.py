@@ -63,7 +63,10 @@ class PeersManager(Thread):
         # NOTE: design decision, if 0 then just send since there's not proportional share
         if denom == 0:
             return True
-        return random.uniform(0, 1) < peer.stats.calculate_download_rate() / denom
+        
+        download_rate = peer.stats.calculate_download_rate()
+        print(f"confirm_send_to_peer: {download_rate} / {denom}")
+        return random.uniform(0, 1) < download_rate / denom
 
     def broadcast_have(self, piece_index: int, bitfield: BitArray) -> None:
         have_message = Have(piece_index)
