@@ -317,7 +317,7 @@ pip3 --version
 
 echo "=== Cloning Repository ==="
 send_log_update "Cloning repository from {github_repo}"
-git clone -b feat/aut-testbed {github_repo} {BITTORRENT_PROJECT_DIR}
+git clone -b feat/distribed {github_repo} {BITTORRENT_PROJECT_DIR}
 echo "Git clone completed with exit code: $?"
 send_log_update "Repository cloned successfully"
 
