@@ -59,7 +59,7 @@ class PeersManager(Thread):
         unchoked_peers = [peer for peer in self.peers if peer.is_unchoked()]
         return sum(peer.stats.calculate_download_rate() for peer in unchoked_peers)
 
-    def confirm_send_to_peer(self, peer: peer.Peer) -> bool:
+    def confirm_send_to_peer(self, peer: Peer) -> bool:
         # We only send a packet to a peer with probability:
         # (peer.download_rate / max_collective_download_rate)
         denom = self.max_collective_download_rate
