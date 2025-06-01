@@ -10,7 +10,8 @@ TORRENT_FILENAME = "file.torrent"  # Default filename for downloaded torrent fil
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Format for logging
 
 # API Endpoints
-LOGS_ENDPOINT = '/logs'  # Endpoint for sending logs (LogHandler.do_POST and generate_user_data)
+LOGS_ENDPOINT = '/logs'  # Endpoint for sending final logs (LogHandler.do_POST and generate_user_data)
+STREAM_ENDPOINT = '/stream'  # Endpoint for streaming log updates (LogHandler.do_POST and generate_user_data)
 COMPLETION_ENDPOINT = '/completion'  # Endpoint for completion notification (LogHandler.do_POST and generate_user_data)
 IP_API_URL = 'https://api.ipify.org'  # API for getting public IP (used in _get_public_ip)
 
@@ -29,6 +30,7 @@ EC2_SERVICE_NAME = 'ec2'  # EC2 service name for boto3 (used in get_ec2_client)
 DEFAULT_TIMEOUT_MINUTES = 30  # Default timeout if not specified in config
 COMPLETION_CHECK_INTERVAL = 10  # Seconds between completion checks (used in wait_for_completion)
 DEFAULT_CONTROLLER_PORT = 8080  # Default port for controller server if not specified in config
+STREAM_INTERVAL = 15  # Seconds between log streaming updates
 
 # Installation Commands
 UPDATE_CMD = "apt-get update"  # Update package lists command (used in generate_user_data)
@@ -43,6 +45,25 @@ ROLE_LEECHER = "leecher"  # Role identifier for leechers (used in deploy_region)
 # Status Constants
 STATUS_COMPLETE = "complete"  # Status indicating completion (used in generate_user_data)
 
+# Color Constants for Terminal Output
+COLOR_RESET = '\033[0m'
+COLOR_BOLD = '\033[1m'
+COLOR_RED = '\033[91m'
+COLOR_GREEN = '\033[92m'
+COLOR_YELLOW = '\033[93m'
+COLOR_BLUE = '\033[94m'
+COLOR_MAGENTA = '\033[95m'
+COLOR_CYAN = '\033[96m'
+
+# Random words for run naming
+RUN_WORDS = [
+    'alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel',
+    'india', 'juliet', 'kilo', 'lima', 'mike', 'november', 'oscar', 'papa',
+    'quebec', 'romeo', 'sierra', 'tango', 'uniform', 'victor', 'whiskey',
+    'xray', 'yankee', 'zulu', 'phoenix', 'thunder', 'lightning', 'storm',
+    'falcon', 'eagle', 'hawk', 'raven', 'wolf', 'tiger', 'lion', 'bear'
+]
+
 import yaml
 import time
 import requests
@@ -51,6 +72,10 @@ import base64
 import threading
 import json
 import boto3
+import random
+import signal
+import sys
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor
 
@@ -77,10 +102,21 @@ class Config:
 class LogHandler(BaseHTTPRequestHandler):
     logs_dir = LOGS_DIR
     completion_status = {}
+    run_name = None
+    log_files = {}  # Track open log files for streaming
+    
+    @classmethod
+    def set_run_name(cls, run_name):
+        cls.run_name = run_name
+        # Create the run directory
+        run_dir = os.path.join(cls.logs_dir, run_name)
+        os.makedirs(run_dir, exist_ok=True)
     
     def do_POST(self):
         if self.path == LOGS_ENDPOINT:
             self._handle_logs()
+        elif self.path == STREAM_ENDPOINT:
+            self._handle_stream()
         elif self.path == COMPLETION_ENDPOINT:
             self._handle_completion()
         else:
@@ -88,18 +124,16 @@ class LogHandler(BaseHTTPRequestHandler):
             self.end_headers()
     
     def _handle_logs(self):
-        # Parse multipart form data without using deprecated cgi module
+        # Handle final log file upload (same as before)
         content_type = self.headers.get('Content-Type', '')
         if not content_type.startswith('multipart/form-data'):
             self.send_response(400)
             self.end_headers()
             return
         
-        # Simple multipart parsing for our specific use case
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
         
-        # Extract boundary
         boundary = content_type.split('boundary=')[1].encode()
         parts = post_data.split(b'--' + boundary)
         
@@ -113,9 +147,41 @@ class LogHandler(BaseHTTPRequestHandler):
                 log_data = part.split(b'\r\n\r\n', 1)[1].rsplit(b'\r\n', 1)[0]
         
         if instance_id and log_data:
-            os.makedirs(self.logs_dir, exist_ok=True)
-            with open(f"{self.logs_dir}/{instance_id}.log", 'wb') as f:
+            run_dir = os.path.join(self.logs_dir, self.run_name)
+            os.makedirs(run_dir, exist_ok=True)
+            log_path = os.path.join(run_dir, f"{instance_id}.log")
+            with open(log_path, 'wb') as f:
                 f.write(log_data)
+            print(f"{COLOR_GREEN}📝 Final log received from {instance_id}{COLOR_RESET}")
+        
+        self.send_response(HTTP_OK)
+        self.end_headers()
+    
+    def _handle_stream(self):
+        # Handle streaming log updates
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length)
+        
+        try:
+            data = json.loads(post_data.decode())
+            instance_id = data.get('instance_id')
+            log_chunk = data.get('log_chunk', '')
+            timestamp = data.get('timestamp', time.time())
+            
+            if instance_id and log_chunk:
+                run_dir = os.path.join(self.logs_dir, self.run_name)
+                os.makedirs(run_dir, exist_ok=True)
+                log_path = os.path.join(run_dir, f"{instance_id}_stream.log")
+                
+                # Append to streaming log file
+                with open(log_path, 'a') as f:
+                    f.write(f"[{datetime.fromtimestamp(timestamp).strftime('%H:%M:%S')}] {log_chunk}\n")
+                
+                # Print live update to console
+                print(f"{COLOR_CYAN}🔄 {instance_id}: {log_chunk.strip()}{COLOR_RESET}")
+                
+        except json.JSONDecodeError:
+            pass
         
         self.send_response(HTTP_OK)
         self.end_headers()
@@ -130,6 +196,10 @@ class LogHandler(BaseHTTPRequestHandler):
         
         if instance_id:
             self.completion_status[instance_id] = status
+            if status == "interrupted":
+                print(f"{COLOR_YELLOW}⚠️ {instance_id} was interrupted but sent logs{COLOR_RESET}")
+            else:
+                print(f"{COLOR_GREEN}✅ {instance_id} completed with status: {status}{COLOR_RESET}")
         
         self.send_response(HTTP_OK)
         self.end_headers()
@@ -161,6 +231,8 @@ class AWSManager:
             self.region_clients[region] = boto3.client(
                 EC2_SERVICE_NAME,
                 region_name=region,
+                aws_access_key_id=self.aws_config['access_key'],
+                aws_secret_access_key=self.aws_config['secret_key']
             )
         return self.region_clients[region]
     
@@ -170,28 +242,84 @@ class AWSManager:
 set -x
 exec > >(tee -a /tmp/startup.log) 2>&1
 
+# Function to send log updates to controller
+send_log_update() {{
+    local message="$1"
+    curl -s -X POST -H "Content-Type: application/json" \\
+        -d '{{"instance_id": "{instance_id}", "log_chunk": "'"$message"'", "timestamp": '$(date +%s)'}}' \\
+        http://{controller_ip}:{controller_port}{STREAM_ENDPOINT} > /dev/null 2>&1 || true
+}}
+
+# Function to send final logs on exit
+send_final_logs() {{
+    echo "=== Sending emergency/final logs to controller ==="
+    send_log_update "Instance {instance_id} is shutting down (potentially interrupted)"
+    
+    # Try to send whatever logs we have
+    if [ -f {LOG_FILE_PATH} ]; then
+        echo "Sending final BitTorrent logs..."
+        curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
+    else
+        # If no main log file, create one with startup log
+        echo "Creating emergency log file..."
+        cp /tmp/startup.log {LOG_FILE_PATH} 2>/dev/null || echo "Emergency log from {instance_id}" > {LOG_FILE_PATH}
+        curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
+    fi
+    
+    # Send completion notification
+    curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "interrupted"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT} || true
+}}
+
+# Set up trap to send logs on any exit
+trap 'send_final_logs' EXIT TERM INT
+
+# Function to stream log file changes
+start_log_streaming() {{
+    {{
+        # Stream startup log
+        tail -f /tmp/startup.log | while read line; do
+            send_log_update "STARTUP: $line"
+            sleep 0.5
+        done &
+        
+        # Stream main BitTorrent log when it appears
+        while [ ! -f {LOG_FILE_PATH} ]; do sleep 2; done
+        tail -f {LOG_FILE_PATH} | while read line; do
+            send_log_update "BITTORRENT: $line"
+            sleep 0.5
+        done &
+    }} &
+}}
+
 echo "=== Starting instance setup for {instance_id} ==="
+send_log_update "Instance {instance_id} starting setup (Role: {role})"
+
 echo "Role: {role}"
 echo "Torrent URL: {torrent_url}"
 echo "Controller: {controller_ip}:{controller_port}"
 echo "Timestamp: $(date)"
 
 echo "=== System Update ==="
+send_log_update "Starting system update..."
 {UPDATE_CMD}
 echo "System update completed with exit code: $?"
+send_log_update "System update completed with exit code: $?"
 
 echo "=== Installing System Packages ==="
+send_log_update "Installing system packages..."
 {INSTALL_PACKAGES_CMD}
-apt-get install -y python3-dev python3-venv build-essential
 echo "System packages installed with exit code: $?"
+send_log_update "System packages installation completed"
 
 echo "=== Python and pip versions ==="
 python3 --version
 pip3 --version
 
 echo "=== Cloning Repository ==="
+send_log_update "Cloning repository from {github_repo}"
 git clone -b feat/aut-testbed {github_repo} {BITTORRENT_PROJECT_DIR}
 echo "Git clone completed with exit code: $?"
+send_log_update "Repository cloned successfully"
 
 cd {BITTORRENT_PROJECT_DIR}
 echo "Current directory: $(pwd)"
@@ -203,13 +331,16 @@ if [ -f requirements.txt ]; then
     echo "requirements.txt found:"
     cat requirements.txt
     echo "--- End of requirements.txt ---"
+    send_log_update "Found requirements.txt with $(wc -l < requirements.txt) packages"
 else
     echo "ERROR: requirements.txt not found!"
+    send_log_update "ERROR: requirements.txt not found!"
     ls -la
     exit 1
 fi
 
 echo "=== Installing Python Dependencies ==="
+send_log_update "Starting Python dependencies installation..."
 # Update pip first
 python3 -m pip install --upgrade pip
 echo "pip upgrade completed with exit code: $?"
@@ -218,16 +349,18 @@ echo "pip upgrade completed with exit code: $?"
 python3 -m pip install -r requirements.txt --verbose --timeout 300
 PIP_EXIT_CODE=$?
 echo "pip install completed with exit code: $PIP_EXIT_CODE"
+send_log_update "Python dependencies installation completed (exit code: $PIP_EXIT_CODE)"
 
 if [ $PIP_EXIT_CODE -ne 0 ]; then
     echo "ERROR: pip install failed!"
-    echo "Trying alternative installation methods..."
+    send_log_update "ERROR: pip install failed, trying individual packages..."
     
     # Try installing each package individually
     echo "Installing packages individually:"
     while IFS= read -r package; do
         if [[ ! "$package" =~ ^[[:space:]]*# ]] && [[ -n "$package" ]]; then
             echo "Installing: $package"
+            send_log_update "Installing individual package: $package"
             python3 -m pip install "$package" --verbose --timeout 300
             echo "Exit code for $package: $?"
         fi
@@ -240,10 +373,12 @@ python3 -m pip list
 mkdir -p {TORRENT_TEMP_DIR}
 
 echo "=== Downloading torrent file ==="
+send_log_update "Downloading torrent file..."
 echo "URL: {torrent_url}"
 curl -L -v -o {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} {torrent_url}
 CURL_EXIT_CODE=$?
 echo "curl completed with exit code: $CURL_EXIT_CODE"
+send_log_update "Torrent file download completed (exit code: $CURL_EXIT_CODE)"
 
 echo "=== Torrent file info ==="
 ls -la {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}
@@ -276,7 +411,11 @@ except Exception as e:
     print(f"Python test failed: {{e}}")
 '
 
+# Start log streaming in background
+start_log_streaming
+
 echo "=== Running BitTorrent client ==="
+send_log_update "Starting BitTorrent client..."
 echo "Command: python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
 echo "Working directory: $(pwd)"
 echo "main.py exists: $(test -f main.py && echo 'yes' || echo 'no')"
@@ -284,6 +423,7 @@ echo "main.py exists: $(test -f main.py && echo 'yes' || echo 'no')"
 python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
 BITTORRENT_EXIT_CODE=$?
 echo "BitTorrent client completed with exit code: $BITTORRENT_EXIT_CODE"
+send_log_update "BitTorrent client finished (exit code: $BITTORRENT_EXIT_CODE)"
 
 echo "=== BitTorrent client finished ==="
 echo "Log file size: $(wc -l < {LOG_FILE_PATH}) lines"
@@ -292,6 +432,9 @@ head -10 {LOG_FILE_PATH}
 echo "Log file last 10 lines:"
 tail -10 {LOG_FILE_PATH}
 
+# Stop log streaming
+pkill -f "tail -f" 2>/dev/null || true
+
 # Append startup log to main log for debugging
 echo "" >> {LOG_FILE_PATH}
 echo "=======================================" >> {LOG_FILE_PATH}
@@ -299,7 +442,8 @@ echo "=== STARTUP LOG ===" >> {LOG_FILE_PATH}
 echo "=======================================" >> {LOG_FILE_PATH}
 cat /tmp/startup.log >> {LOG_FILE_PATH}
 
-echo "=== Sending logs to controller ==="
+echo "=== Sending final logs to controller ==="
+send_log_update "Sending final logs to controller..."
 curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
 CURL_LOG_EXIT_CODE=$?
 echo "Log upload completed with exit code: $CURL_LOG_EXIT_CODE"
@@ -309,7 +453,12 @@ CURL_COMPLETION_EXIT_CODE=$?
 echo "Completion notification sent with exit code: $CURL_COMPLETION_EXIT_CODE"
 
 echo "=== Instance setup completed ==="
+send_log_update "Instance setup completed, shutting down..."
 echo "Final timestamp: $(date)"
+
+# Remove the trap since we're exiting normally
+trap - EXIT TERM INT
+
 {SHUTDOWN_CMD}
 """
         return base64.b64encode(script.encode()).decode()
@@ -343,6 +492,83 @@ class BitTorrentDeployer:
         self.controller_ip = self._get_public_ip()
         self.region_instances = {}
         self.total_instance_count = 0
+        self.cleanup_in_progress = False
+        self.handler = None
+        
+        # Generate unique run name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        random_word = random.choice(RUN_WORDS)
+        self.run_name = f"{random_word}_{timestamp}"
+        
+        # Set up log directory for this run
+        LogHandler.set_run_name(self.run_name)
+        
+        # Set up signal handler for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+    
+    def _signal_handler(self, signum, frame):
+        """Handle keyboard interrupt (Ctrl+C) gracefully"""
+        if self.cleanup_in_progress:
+            print(f"\n{COLOR_RED}💀 Force terminating... (second Ctrl+C received){COLOR_RESET}")
+            sys.exit(1)
+        
+        print(f"\n\n{COLOR_YELLOW}🛑 Keyboard interrupt received! Starting graceful cleanup...{COLOR_RESET}")
+        self.cleanup_in_progress = True
+        self._emergency_cleanup()
+        sys.exit(0)
+    
+    def _emergency_cleanup(self):
+        """Emergency cleanup when interrupted"""
+        print(f"{COLOR_YELLOW}🚨 Emergency cleanup initiated{COLOR_RESET}")
+        
+        try:
+            # Try to collect any available logs quickly
+            if self.handler:
+                print(f"{COLOR_CYAN}📡 Attempting to collect available logs...{COLOR_RESET}")
+                time.sleep(2)  # Give a moment for any pending logs
+                
+                # Show what we have so far
+                print(f"\n{COLOR_BOLD}=== Emergency Log Summary ==={COLOR_RESET}")
+                run_dir = os.path.join(LOGS_DIR, self.run_name)
+                
+                if os.path.exists(run_dir):
+                    for file in os.listdir(run_dir):
+                        if file.endswith('.log'):
+                            file_path = os.path.join(run_dir, file)
+                            file_size = os.path.getsize(file_path)
+                            print(f"{COLOR_GREEN}📝 {file} ({file_size} bytes){COLOR_RESET}")
+                
+                # Show completion status
+                if self.handler.completion_status:
+                    print(f"\n{COLOR_BOLD}=== Instance Status ==={COLOR_RESET}")
+                    for instance_id, status in self.handler.completion_status.items():
+                        print(f"{COLOR_GREEN}✅ {instance_id}: {status}{COLOR_RESET}")
+        except Exception as e:
+            print(f"{COLOR_RED}⚠ Error during log collection: {e}{COLOR_RESET}")
+        
+        # Force terminate all instances
+        try:
+            print(f"\n{COLOR_BOLD}=== Emergency Instance Termination ==={COLOR_RESET}")
+            for region_name, instance_ids in self.region_instances.items():
+                if instance_ids:
+                    print(f"{COLOR_YELLOW}🔥 Force terminating {len(instance_ids)} instances in {region_name}...{COLOR_RESET}")
+                    try:
+                        self.aws_manager.terminate_instances(region_name, instance_ids)
+                        print(f"{COLOR_GREEN}✓ Terminated instances in {region_name}{COLOR_RESET}")
+                    except Exception as e:
+                        print(f"{COLOR_RED}✗ Error terminating instances in {region_name}: {e}{COLOR_RESET}")
+                        
+            # Stop log server
+            if self.log_server:
+                self.log_server.stop()
+                print(f"{COLOR_GREEN}✓ Log server stopped{COLOR_RESET}")
+                
+        except Exception as e:
+            print(f"{COLOR_RED}⚠ Error during instance cleanup: {e}{COLOR_RESET}")
+        
+        print(f"\n{COLOR_BOLD}{COLOR_YELLOW}🛑 Emergency cleanup completed{COLOR_RESET}")
+        print(f"{COLOR_BOLD}{COLOR_BLUE}📁 Partial logs saved in: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
+        print(f"{COLOR_YELLOW}💡 Run again or check AWS console to ensure all instances are terminated{COLOR_RESET}")
     
     def _get_public_ip(self):
         response = requests.get(IP_API_URL)
@@ -388,6 +614,8 @@ class BitTorrentDeployer:
         timeout = time.time() + (timeout_minutes * 60)
         
         while time.time() < timeout:
+            if self.cleanup_in_progress:
+                return False
             if len(handler.completion_status) >= self.total_instance_count:
                 return True
             time.sleep(COMPLETION_CHECK_INTERVAL)
@@ -395,102 +623,141 @@ class BitTorrentDeployer:
         return False
     
     def run(self):
-        print("Starting BitTorrent network deployment...")
-        
-        # Start log server
-        handler = self.log_server.start()
-        print(f"Log server started on port {self.config.get_controller_port()}")
-        print(f"Controller IP: {self.controller_ip}")
-        
-        # Get torrent URL from GitHub
-        torrent_url = self.config.get_bittorrent_config()['torrent_url']
-        github_repo = self.config.get_bittorrent_config()['github_repo']
-        
-        print(f"\n=== Configuration ===")
-        print(f"GitHub repo: {github_repo}")
-        print(f"Torrent URL: {torrent_url}")
-        print(f"Command to be run on each instance: python3 -m main /tmp/torrents/file.torrent")
-        
-        # Test torrent URL accessibility
-        print(f"\n=== Testing torrent URL ===")
         try:
-            import requests
-            response = requests.head(torrent_url)
-            print(f"Torrent URL status: {response.status_code}")
-            if response.status_code == 200:
-                print(f"✓ Torrent file accessible ({response.headers.get('content-length', 'unknown')} bytes)")
-            else:
-                print(f"✗ Torrent URL returned {response.status_code} - this will cause failures!")
-        except Exception as e:
-            print(f"✗ Could not test torrent URL: {e}")
-        
-        # Calculate total instance count
-        for region in self.config.get_regions():
-            self.total_instance_count += region['seeders'] + region['leechers']
-        
-        print(f"\n=== Deployment Plan ===")
-        for region in self.config.get_regions():
-            print(f"Region {region['name']}: {region['seeders']} seeders, {region['leechers']} leechers")
-        print(f"Total instances: {self.total_instance_count}")
-        
-        # Deploy instances
-        print(f"\n=== Launching Instances ===")
-        with ThreadPoolExecutor() as executor:
-            futures = []
+            print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 BitTorrent Network Deployment{COLOR_RESET}")
+            print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 Run Name: {self.run_name}{COLOR_RESET}")
+            print(f"{COLOR_BOLD}{COLOR_BLUE}💾 Logs Directory: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
+            print(f"{COLOR_YELLOW}💡 Press Ctrl+C at any time for graceful cleanup{COLOR_RESET}")
             
+            # Start log server
+            self.handler = self.log_server.start()
+            print(f"{COLOR_GREEN}🌐 Log server started on port {self.config.get_controller_port()}{COLOR_RESET}")
+            print(f"{COLOR_GREEN}🌍 Controller IP: {self.controller_ip}{COLOR_RESET}")
+            
+            # Get torrent URL from GitHub
+            torrent_url = self.config.get_bittorrent_config()['torrent_url']
+            github_repo = self.config.get_bittorrent_config()['github_repo']
+            
+            print(f"\n{COLOR_BOLD}=== Configuration ==={COLOR_RESET}")
+            print(f"📂 GitHub repo: {github_repo}")
+            print(f"📁 Torrent URL: {torrent_url}")
+            print(f"⚡ Command to be run on each instance: python3 -m main /tmp/torrents/file.torrent")
+            
+            # Test torrent URL accessibility
+            print(f"\n{COLOR_BOLD}=== Testing torrent URL ==={COLOR_RESET}")
+            try:
+                import requests
+                response = requests.head(torrent_url)
+                print(f"🌐 Torrent URL status: {response.status_code}")
+                if response.status_code == 200:
+                    print(f"{COLOR_GREEN}✓ Torrent file accessible ({response.headers.get('content-length', 'unknown')} bytes){COLOR_RESET}")
+                else:
+                    print(f"{COLOR_RED}✗ Torrent URL returned {response.status_code} - this will cause failures!{COLOR_RESET}")
+            except Exception as e:
+                print(f"{COLOR_RED}✗ Could not test torrent URL: {e}{COLOR_RESET}")
+            
+            # Calculate total instance count
             for region in self.config.get_regions():
-                futures.append(
-                    executor.submit(
-                        self.deploy_region,
-                        region,
-                        torrent_url
-                    )
-                )
+                self.total_instance_count += region['seeders'] + region['leechers']
             
-            for future in futures:
-                region_name, instance_ids = future.result()
-                self.region_instances[region_name] = instance_ids
-                print(f"✓ Launched {len(instance_ids)} instances in {region_name}")
-        
-        print(f"✓ Deployed {self.total_instance_count} instances across {len(self.config.get_regions())} regions")
-        
-        # Wait for completion
-        print(f"\n=== Waiting for Completion ===")
-        print("Instances are now:")
-        print("1. Booting up (1-2 minutes)")
-        print("2. Installing dependencies (2-3 minutes)")
-        print("3. Running BitTorrent clients")
-        print("4. Sending logs back when complete")
-        print(f"Will wait up to {self.config.get_timeout_minutes()} minutes...")
-        
-        completed = self.wait_for_completion(handler, self.config.get_timeout_minutes())
-        
-        if completed:
-            print("✓ All instances completed successfully")
-        else:
-            print("⚠ Timeout reached, some instances may not have completed")
-        
-        # Process logs
-        print(f"\n=== Log Summary ===")
-        for instance_id, status in handler.completion_status.items():
-            log_path = f"logs/{instance_id}.log"
-            if os.path.exists(log_path):
-                print(f"✓ {instance_id}: {status} (log collected)")
+            print(f"\n{COLOR_BOLD}=== Deployment Plan ==={COLOR_RESET}")
+            for region in self.config.get_regions():
+                print(f"🌍 Region {region['name']}: {COLOR_GREEN}{region['seeders']} seeders{COLOR_RESET}, {COLOR_BLUE}{region['leechers']} leechers{COLOR_RESET}")
+            print(f"📊 Total instances: {COLOR_BOLD}{self.total_instance_count}{COLOR_RESET}")
+            
+            # Deploy instances
+            print(f"\n{COLOR_BOLD}=== Launching Instances ==={COLOR_RESET}")
+            with ThreadPoolExecutor() as executor:
+                futures = []
+                
+                for region in self.config.get_regions():
+                    futures.append(
+                        executor.submit(
+                            self.deploy_region,
+                            region,
+                            torrent_url
+                        )
+                    )
+                
+                for future in futures:
+                    if self.cleanup_in_progress:
+                        break
+                    region_name, instance_ids = future.result()
+                    self.region_instances[region_name] = instance_ids
+                    print(f"{COLOR_GREEN}✓ Launched {len(instance_ids)} instances in {region_name}{COLOR_RESET}")
+            
+            if self.cleanup_in_progress:
+                return {}
+                
+            print(f"{COLOR_GREEN}✅ Deployed {self.total_instance_count} instances across {len(self.config.get_regions())} regions{COLOR_RESET}")
+            
+            # Wait for completion
+            print(f"\n{COLOR_BOLD}=== Waiting for Completion ==={COLOR_RESET}")
+            print("📡 Live streaming logs from instances:")
+            print("  🔵 Startup logs prefixed with 'STARTUP:'")
+            print("  🟢 BitTorrent logs prefixed with 'BITTORRENT:'")
+            print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes...")
+            print(f"📁 Logs being saved to: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
+            print(f"{COLOR_YELLOW}💡 Press Ctrl+C anytime to stop and cleanup{COLOR_RESET}")
+            print()
+            
+            completed = self.wait_for_completion(self.handler, self.config.get_timeout_minutes())
+            
+            if self.cleanup_in_progress:
+                return {}
+            
+            if completed:
+                print(f"\n{COLOR_GREEN}✅ All instances completed successfully{COLOR_RESET}")
             else:
-                print(f"✗ {instance_id}: {status} (no log collected)")
-        
-        # Cleanup resources
-        print(f"\n=== Cleanup ===")
-        for region_name, instance_ids in self.region_instances.items():
-            self.aws_manager.terminate_instances(region_name, instance_ids)
-            print(f"✓ Terminated {len(instance_ids)} instances in {region_name}")
-        
-        # Stop log server
-        self.log_server.stop()
-        print("✓ Log server stopped")
-        
-        return handler.completion_status
+                print(f"\n{COLOR_YELLOW}⚠ Timeout reached, some instances may not have completed{COLOR_RESET}")
+            
+            # Process logs
+            print(f"\n{COLOR_BOLD}=== Log Summary ==={COLOR_RESET}")
+            run_dir = os.path.join(LOGS_DIR, self.run_name)
+            for instance_id, status in self.handler.completion_status.items():
+                final_log = os.path.join(run_dir, f"{instance_id}.log")
+                stream_log = os.path.join(run_dir, f"{instance_id}_stream.log")
+                
+                if os.path.exists(final_log):
+                    print(f"{COLOR_GREEN}✓ {instance_id}: {status} (final log: {final_log}){COLOR_RESET}")
+                else:
+                    print(f"{COLOR_RED}✗ {instance_id}: {status} (no final log){COLOR_RESET}")
+                
+                if os.path.exists(stream_log):
+                    print(f"  {COLOR_CYAN}📡 Stream log: {stream_log}{COLOR_RESET}")
+            
+            # Cleanup resources
+            print(f"\n{COLOR_BOLD}=== Cleanup ==={COLOR_RESET}")
+            for region_name, instance_ids in self.region_instances.items():
+                self.aws_manager.terminate_instances(region_name, instance_ids)
+                print(f"{COLOR_GREEN}✓ Terminated {len(instance_ids)} instances in {region_name}{COLOR_RESET}")
+            
+            # Stop log server
+            self.log_server.stop()
+            print(f"{COLOR_GREEN}✓ Log server stopped{COLOR_RESET}")
+            
+            print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 BitTorrent network test completed!{COLOR_RESET}")
+            print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 All logs saved in: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
+            
+            return self.handler.completion_status
+            
+        except KeyboardInterrupt:
+            # This should be handled by the signal handler, but just in case
+            self._emergency_cleanup()
+            sys.exit(0)
+        except Exception as e:
+            print(f"\n{COLOR_RED}💥 Unexpected error: {e}{COLOR_RESET}")
+            if not self.cleanup_in_progress:
+                self._emergency_cleanup()
+            raise
 
 if __name__ == "__main__":
-    deployer = BitTorrentDeployer()
-    deployer.run()
+    try:
+        deployer = BitTorrentDeployer()
+        deployer.run()
+    except KeyboardInterrupt:
+        print(f"\n{COLOR_YELLOW}🛑 Interrupted by user{COLOR_RESET}")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n{COLOR_RED}💥 Fatal error: {e}{COLOR_RESET}")
+        sys.exit(1)
