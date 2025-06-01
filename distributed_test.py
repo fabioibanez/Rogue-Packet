@@ -179,14 +179,25 @@ class LogHandler(BaseHTTPRequestHandler):
         # Group by region and role
         regions = {}
         for instance_id, info in cls.instance_status.items():
-            # Parse instance_id format: "region-role-index"
+            # Parse instance_id format: "region-role-index" 
+            # Handle multi-part regions like "eu-west-1"
             parts = instance_id.split('-')
             if len(parts) >= 3:
-                region = parts[0]
-                role = parts[1]
-                if region not in regions:
-                    regions[region] = {'seeders': [], 'leechers': []}
-                regions[region][role + 's'].append((instance_id, info))
+                # Find the role (seeder or leecher) in the parts
+                role = None
+                region_parts = []
+                
+                for i, part in enumerate(parts):
+                    if part in ['seeder', 'leecher']:
+                        role = part
+                        region_parts = parts[:i]  # Everything before the role
+                        break
+                
+                if role and region_parts:
+                    region = '-'.join(region_parts)  # Reconstruct region name
+                    if region not in regions:
+                        regions[region] = {'seeders': [], 'leechers': []}
+                    regions[region][role + 's'].append((instance_id, info))
         
         for region_name, roles in regions.items():
             print(f"\n{COLOR_BOLD}{COLOR_BLUE}🌍 {region_name.upper()}{COLOR_RESET}")
@@ -310,11 +321,16 @@ class LogHandler(BaseHTTPRequestHandler):
             
             if instance_id:
                 self.ready_instances.add(instance_id)
-                print(f"{COLOR_CYAN}🟢 {instance_id} is ready ({len(self.ready_instances)}/{self.total_expected_instances}){COLOR_RESET}")
+                self.update_instance_status(instance_id, self.STATUS_WAITING)
                 
                 # Check if all instances are ready
                 if len(self.ready_instances) >= self.total_expected_instances:
-                    print(f"{COLOR_GREEN}🚀 All {self.total_expected_instances} instances are ready! BitTorrent phase can begin.{COLOR_RESET}")
+                    # Final status update showing sync complete
+                    for ready_id in self.ready_instances:
+                        if 'seeder' in ready_id:
+                            self.update_instance_status(ready_id, self.STATUS_SEEDING)
+                        else:
+                            self.update_instance_status(ready_id, self.STATUS_DOWNLOADING_BT, progress=0)
                     
         except json.JSONDecodeError:
             pass
@@ -446,9 +462,9 @@ class LogHandler(BaseHTTPRequestHandler):
         if instance_id:
             self.completion_status[instance_id] = status
             if status == "interrupted":
-                print(f"{COLOR_YELLOW}⚠️ {instance_id} was interrupted but sent logs{COLOR_RESET}")
+                self.update_instance_status(instance_id, self.STATUS_ERROR, message="Interrupted")
             else:
-                print(f"{COLOR_GREEN}✅ {instance_id} completed with status: {status}{COLOR_RESET}")
+                self.update_instance_status(instance_id, self.STATUS_COMPLETED)
         
         self.send_response(HTTP_OK)
         self.end_headers()
@@ -1131,15 +1147,15 @@ class BitTorrentDeployer:
             print(f"{COLOR_GREEN}✅ Deployed {self.total_instance_count} instances across {len(self.config.get_regions())} regions{COLOR_RESET}")
             
             # Wait for completion
-            print(f"\n{COLOR_BOLD}=== Waiting for Completion ==={COLOR_RESET}")
-            print("📡 Live streaming logs from instances:")
-            print("  🔵 Startup logs prefixed with 'STARTUP:'")
-            print("  🟢 BitTorrent logs prefixed with 'BITTORRENT:'")
-            print("  🔄 Synchronization: All instances will wait until everyone is ready")
+            print(f"\n{COLOR_BOLD}=== Live Status Dashboard ==={COLOR_RESET}")
+            print("🔄 Synchronization: All instances will wait until everyone is ready")
             print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes...")
             print(f"📁 Logs being saved to: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C anytime to stop and cleanup{COLOR_RESET}")
-            print()
+            print("\n" + "=" * 80)
+            
+            # Initial dashboard display
+            LogHandler.display_status_dashboard()
             
             completed = self.wait_for_completion(self.handler, self.config.get_timeout_minutes())
             
@@ -1148,8 +1164,12 @@ class BitTorrentDeployer:
             
             if completed:
                 print(f"\n{COLOR_GREEN}✅ All instances completed successfully{COLOR_RESET}")
+                # Final status display
+                LogHandler.display_status_dashboard()
             else:
                 print(f"\n{COLOR_YELLOW}⚠ Timeout reached, some instances may not have completed{COLOR_RESET}")
+                # Final status display
+                LogHandler.display_status_dashboard()
             
             # Process logs
             print(f"\n{COLOR_BOLD}=== Log Summary ==={COLOR_RESET}")
