@@ -20,6 +20,8 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Format fo
 LOGS_ENDPOINT = '/logs'  # Endpoint for sending final logs (LogHandler.do_POST and generate_user_data)
 STREAM_ENDPOINT = '/stream'  # Endpoint for streaming log updates (LogHandler.do_POST and generate_user_data)
 COMPLETION_ENDPOINT = '/completion'  # Endpoint for completion notification (LogHandler.do_POST and generate_user_data)
+READY_ENDPOINT = '/ready'  # Endpoint for instance ready notification (synchronization barrier)
+START_ENDPOINT = '/start'  # Endpoint for checking if all instances are ready to start
 IP_API_URL = 'https://api.ipify.org'  # API for getting public IP (used in _get_public_ip)
 
 # HTTP Constants
@@ -114,6 +116,8 @@ class Config:
 class LogHandler(BaseHTTPRequestHandler):
     logs_dir = LOGS_DIR
     completion_status = {}
+    ready_instances = set()  # Track instances that are ready to start
+    total_expected_instances = 0  # Total number of instances expected
     run_name = None
     log_files = {}  # Track open log files for streaming
     
@@ -124,6 +128,11 @@ class LogHandler(BaseHTTPRequestHandler):
         run_dir = os.path.join(cls.logs_dir, run_name)
         os.makedirs(run_dir, exist_ok=True)
     
+    @classmethod
+    def set_total_instances(cls, total):
+        cls.total_expected_instances = total
+        cls.ready_instances = set()  # Reset ready instances
+    
     def do_POST(self):
         if self.path == LOGS_ENDPOINT:
             self._handle_logs()
@@ -131,6 +140,15 @@ class LogHandler(BaseHTTPRequestHandler):
             self._handle_stream()
         elif self.path == COMPLETION_ENDPOINT:
             self._handle_completion()
+        elif self.path == READY_ENDPOINT:
+            self._handle_ready()
+        else:
+            self.send_response(HTTP_NOT_FOUND)
+            self.end_headers()
+    
+    def do_GET(self):
+        if self.path == START_ENDPOINT:
+            self._handle_start_check()
         else:
             self.send_response(HTTP_NOT_FOUND)
             self.end_headers()
@@ -168,6 +186,45 @@ class LogHandler(BaseHTTPRequestHandler):
         
         self.send_response(HTTP_OK)
         self.end_headers()
+    
+    def _handle_ready(self):
+        """Handle instance ready notification for synchronization"""
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length)
+        
+        try:
+            data = json.loads(post_data.decode())
+            instance_id = data.get('instance_id')
+            status = data.get('status', 'ready')
+            
+            if instance_id:
+                self.ready_instances.add(instance_id)
+                print(f"{COLOR_CYAN}🟢 {instance_id} is ready ({len(self.ready_instances)}/{self.total_expected_instances}){COLOR_RESET}")
+                
+                # Check if all instances are ready
+                if len(self.ready_instances) >= self.total_expected_instances:
+                    print(f"{COLOR_GREEN}🚀 All {self.total_expected_instances} instances are ready! BitTorrent phase can begin.{COLOR_RESET}")
+                    
+        except json.JSONDecodeError:
+            pass
+        
+        self.send_response(HTTP_OK)
+        self.end_headers()
+    
+    def _handle_start_check(self):
+        """Handle requests from instances checking if they can start BitTorrent"""
+        # Return 200 if all instances are ready, 202 if still waiting
+        if len(self.ready_instances) >= self.total_expected_instances:
+            response = {"status": "start", "message": "All instances ready, begin BitTorrent"}
+            status_code = HTTP_OK
+        else:
+            response = {"status": "wait", "message": f"Waiting for instances ({len(self.ready_instances)}/{self.total_expected_instances})"}
+            status_code = 202  # Accepted but not ready
+        
+        self.send_response(status_code)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode())
     
     def _handle_stream(self):
         # Handle streaming log updates
@@ -521,6 +578,34 @@ except Exception as e:
 # Start log streaming in background
 start_log_streaming
 
+echo "=== Setup Complete - Waiting for All Instances ==="
+send_log_update "Setup complete, waiting for synchronization barrier..."
+
+# Notify controller that this instance is ready
+echo "Notifying controller that {instance_id} is ready..."
+curl -X POST -H "Content-Type: application/json" \\
+    -d '{{"instance_id": "{instance_id}", "status": "ready"}}' \\
+    http://{controller_ip}:{controller_port}{READY_ENDPOINT}
+
+echo "Waiting for all instances to be ready before starting BitTorrent..."
+send_log_update "Waiting for all instances to be ready..."
+
+# Poll the controller until all instances are ready
+while true; do
+    RESPONSE=$(curl -s http://{controller_ip}:{controller_port}{START_ENDPOINT})
+    STATUS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', 'unknown'))" 2>/dev/null || echo "unknown")
+    
+    if [ "$STATUS" = "start" ]; then
+        echo "✅ All instances ready! Starting BitTorrent client..."
+        send_log_update "All instances ready, starting BitTorrent client!"
+        break
+    else
+        echo "⏳ Still waiting for other instances... (Status: $STATUS)"
+        send_log_update "Still waiting for synchronization..."
+        sleep 5
+    fi
+done
+
 echo "=== Running BitTorrent client ==="
 if [ "{role}" == "{ROLE_SEEDER}" ]; then
     send_log_update "Starting BitTorrent client as SEEDER with -s flag..."
@@ -614,6 +699,10 @@ class BitTorrentDeployer:
         
         # Set up log directory for this run
         LogHandler.set_run_name(self.run_name)
+        
+        # Calculate total instance count for synchronization
+        for region in self.config.get_regions():
+            self.total_instance_count += region['seeders'] + region['leechers']
         
         # Set up signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -781,10 +870,12 @@ class BitTorrentDeployer:
                 print(f"\n{COLOR_RED}💥 AMI validation failed: {ami_error}{COLOR_RESET}")
                 return {}
             
-            # Start log server
+            # Start log server and set total instance count for synchronization
             self.handler = self.log_server.start()
+            LogHandler.set_total_instances(self.total_instance_count)
             print(f"\n{COLOR_GREEN}🌐 Log server started on port {self.config.get_controller_port()}{COLOR_RESET}")
             print(f"{COLOR_GREEN}🌍 Controller IP: {self.controller_ip}{COLOR_RESET}")
+            print(f"{COLOR_BLUE}🔄 Synchronization barrier set for {self.total_instance_count} instances{COLOR_RESET}")
             
             # Get torrent URL from GitHub
             torrent_url = self.config.get_bittorrent_config()['torrent_url']
@@ -822,9 +913,7 @@ class BitTorrentDeployer:
             except Exception as e:
                 print(f"{COLOR_RED}✗ Could not test URLs: {e}{COLOR_RESET}")
             
-            # Calculate total instance count
-            for region in self.config.get_regions():
-                self.total_instance_count += region['seeders'] + region['leechers']
+            # Total instance count already calculated in __init__
             
             print(f"\n{COLOR_BOLD}=== Deployment Plan ==={COLOR_RESET}")
             for region in self.config.get_regions():
@@ -866,6 +955,7 @@ class BitTorrentDeployer:
             print("📡 Live streaming logs from instances:")
             print("  🔵 Startup logs prefixed with 'STARTUP:'")
             print("  🟢 BitTorrent logs prefixed with 'BITTORRENT:'")
+            print("  🔄 Synchronization: All instances will wait until everyone is ready")
             print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes...")
             print(f"📁 Logs being saved to: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C anytime to stop and cleanup{COLOR_RESET}")
