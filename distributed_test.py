@@ -325,12 +325,15 @@ class LogHandler(BaseHTTPRequestHandler):
                 
                 # Check if all instances are ready
                 if len(self.ready_instances) >= self.total_expected_instances:
-                    # Final status update showing sync complete
+                    # Transition all instances to their BitTorrent phase
                     for ready_id in self.ready_instances:
                         if 'seeder' in ready_id:
                             self.update_instance_status(ready_id, self.STATUS_SEEDING)
                         else:
                             self.update_instance_status(ready_id, self.STATUS_DOWNLOADING_BT, progress=0)
+                    
+                    # Force a status update to show the transition
+                    self.display_status_dashboard()
                     
         except json.JSONDecodeError:
             pass
