@@ -45,6 +45,9 @@ ROLE_LEECHER = "leecher"  # Role identifier for leechers (used in deploy_region)
 # Status Constants
 STATUS_COMPLETE = "complete"  # Status indicating completion (used in generate_user_data)
 
+SEED_TEMP_DIR = "/tmp/seed_files"  # Directory for storing actual seed files on seeder instances
+SEED_FILENAME = "seed_file"  # Default filename for downloaded seed file
+
 # Color Constants for Terminal Output
 COLOR_RESET = '\033[0m'
 COLOR_BOLD = '\033[1m'
@@ -236,7 +239,7 @@ class AWSManager:
             )
         return self.region_clients[region]
     
-    def generate_user_data(self, github_repo, torrent_url, role, controller_ip, controller_port, instance_id):
+    def generate_user_data(self, github_repo, torrent_url, seed_fileurl, role, controller_ip, controller_port, instance_id):
         script = f"""#!/bin/bash
 # Debug: Log all commands and outputs
 set -x
@@ -317,7 +320,7 @@ pip3 --version
 
 echo "=== Cloning Repository ==="
 send_log_update "Cloning repository from {github_repo}"
-git clone -b feat/distribed {github_repo} {BITTORRENT_PROJECT_DIR}
+git clone -b feat/aut-testbed {github_repo} {BITTORRENT_PROJECT_DIR}
 echo "Git clone completed with exit code: $?"
 send_log_update "Repository cloned successfully"
 
@@ -370,7 +373,9 @@ fi
 echo "=== Installed packages ==="
 python3 -m pip list
 
+# Create necessary directories
 mkdir -p {TORRENT_TEMP_DIR}
+mkdir -p {SEED_TEMP_DIR}
 
 echo "=== Downloading torrent file ==="
 send_log_update "Downloading torrent file..."
@@ -385,6 +390,31 @@ ls -la {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}
 file {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}
 echo "File size: $(stat -c%s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}) bytes"
 head -c 100 {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} | hexdump -C
+
+# Role-specific setup
+if [ "{role}" == "{ROLE_SEEDER}" ]; then
+    echo "=== Seeder Setup: Downloading actual file ==="
+    send_log_update "Seeder downloading actual file for seeding..."
+    echo "Seed file URL: {seed_fileurl}"
+    curl -L -v -o {SEED_TEMP_DIR}/{SEED_FILENAME} {seed_fileurl}
+    SEED_CURL_EXIT_CODE=$?
+    echo "Seed file download completed with exit code: $SEED_CURL_EXIT_CODE"
+    send_log_update "Seed file download completed (exit code: $SEED_CURL_EXIT_CODE)"
+    
+    echo "=== Seed file info ==="
+    ls -la {SEED_TEMP_DIR}/{SEED_FILENAME}
+    file {SEED_TEMP_DIR}/{SEED_FILENAME}
+    echo "Seed file size: $(stat -c%s {SEED_TEMP_DIR}/{SEED_FILENAME}) bytes"
+    
+    if [ $SEED_CURL_EXIT_CODE -ne 0 ]; then
+        echo "ERROR: Failed to download seed file!"
+        send_log_update "ERROR: Failed to download seed file for seeder!"
+        exit 1
+    fi
+else
+    echo "=== Leecher Setup: No seed file needed ==="
+    send_log_update "Leecher setup - will download file via BitTorrent"
+fi
 
 export BITTORRENT_ROLE="{role}"
 export INSTANCE_ID="{instance_id}"
@@ -415,12 +445,17 @@ except Exception as e:
 start_log_streaming
 
 echo "=== Running BitTorrent client ==="
-send_log_update "Starting BitTorrent client..."
-echo "Command: python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
-echo "Working directory: $(pwd)"
-echo "main.py exists: $(test -f main.py && echo 'yes' || echo 'no')"
+if [ "{role}" == "{ROLE_SEEDER}" ]; then
+    send_log_update "Starting BitTorrent client as SEEDER with -s flag..."
+    echo "Command: python3 -m main -s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
+    echo "Seed file available at: {SEED_TEMP_DIR}/{SEED_FILENAME}"
+    python3 -m main -s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
+else
+    send_log_update "Starting BitTorrent client as LEECHER..."
+    echo "Command: python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
+    python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
+fi
 
-python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
 BITTORRENT_EXIT_CODE=$?
 echo "BitTorrent client completed with exit code: $BITTORRENT_EXIT_CODE"
 send_log_update "BitTorrent client finished (exit code: $BITTORRENT_EXIT_CODE)"
@@ -574,7 +609,7 @@ class BitTorrentDeployer:
         response = requests.get(IP_API_URL)
         return response.text
     
-    def deploy_region(self, region_config, torrent_url):
+    def deploy_region(self, region_config, torrent_url, seed_fileurl):
         region_name = region_config['name']
         instance_ids = []
         
@@ -584,6 +619,7 @@ class BitTorrentDeployer:
             user_data = self.aws_manager.generate_user_data(
                 self.config.get_bittorrent_config()['github_repo'],
                 torrent_url,
+                seed_fileurl,
                 ROLE_SEEDER,
                 self.controller_ip,
                 self.config.get_controller_port(),
@@ -599,6 +635,7 @@ class BitTorrentDeployer:
             user_data = self.aws_manager.generate_user_data(
                 self.config.get_bittorrent_config()['github_repo'],
                 torrent_url,
+                seed_fileurl,
                 ROLE_LEECHER,
                 self.controller_ip,
                 self.config.get_controller_port(),
@@ -636,25 +673,39 @@ class BitTorrentDeployer:
             
             # Get torrent URL from GitHub
             torrent_url = self.config.get_bittorrent_config()['torrent_url']
+            seed_fileurl = self.config.get_bittorrent_config()['seed_fileurl']
             github_repo = self.config.get_bittorrent_config()['github_repo']
             
             print(f"\n{COLOR_BOLD}=== Configuration ==={COLOR_RESET}")
             print(f"📂 GitHub repo: {github_repo}")
             print(f"📁 Torrent URL: {torrent_url}")
-            print(f"⚡ Command to be run on each instance: python3 -m main /tmp/torrents/file.torrent")
+            print(f"🌱 Seed file URL: {seed_fileurl}")
+            print(f"⚡ Commands to be run:")
+            print(f"   🌱 Seeders: {COLOR_GREEN}python3 -m main -s /tmp/torrents/file.torrent{COLOR_RESET}")
+            print(f"   📥 Leechers: {COLOR_BLUE}python3 -m main /tmp/torrents/file.torrent{COLOR_RESET}")
             
             # Test torrent URL accessibility
-            print(f"\n{COLOR_BOLD}=== Testing torrent URL ==={COLOR_RESET}")
+            print(f"\n{COLOR_BOLD}=== Testing URLs ==={COLOR_RESET}")
             try:
                 import requests
+                # Test torrent URL
                 response = requests.head(torrent_url)
                 print(f"🌐 Torrent URL status: {response.status_code}")
                 if response.status_code == 200:
                     print(f"{COLOR_GREEN}✓ Torrent file accessible ({response.headers.get('content-length', 'unknown')} bytes){COLOR_RESET}")
                 else:
                     print(f"{COLOR_RED}✗ Torrent URL returned {response.status_code} - this will cause failures!{COLOR_RESET}")
+                
+                # Test seed file URL
+                seed_response = requests.head(seed_fileurl)
+                print(f"🌱 Seed file URL status: {seed_response.status_code}")
+                if seed_response.status_code == 200:
+                    print(f"{COLOR_GREEN}✓ Seed file accessible ({seed_response.headers.get('content-length', 'unknown')} bytes){COLOR_RESET}")
+                else:
+                    print(f"{COLOR_RED}✗ Seed file URL returned {seed_response.status_code} - seeders will fail!{COLOR_RESET}")
+                    
             except Exception as e:
-                print(f"{COLOR_RED}✗ Could not test torrent URL: {e}{COLOR_RESET}")
+                print(f"{COLOR_RED}✗ Could not test URLs: {e}{COLOR_RESET}")
             
             # Calculate total instance count
             for region in self.config.get_regions():
@@ -675,7 +726,8 @@ class BitTorrentDeployer:
                         executor.submit(
                             self.deploy_region,
                             region,
-                            torrent_url
+                            torrent_url,
+                            seed_fileurl
                         )
                     )
                 
