@@ -3,12 +3,12 @@ from mininet.topo import Topo, SingleSwitchTopo
 from mininet.net import Mininet
 from mininet.log import lg, info
 from mininet.cli import CLI
-from mininet.node import Controller
+from mininet.node import OVSController
 
 def main():
     lg.setLogLevel('info')
-    # Use the built-in controller
-    net = Mininet(SingleSwitchTopo(k=2), controller=Controller)
+    # Use OVS controller
+    net = Mininet(SingleSwitchTopo(k=2), controller=OVSController)
     net.start()
     
     h1 = net.get('h1')
