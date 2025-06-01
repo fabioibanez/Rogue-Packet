@@ -118,8 +118,22 @@ class LogHandler(BaseHTTPRequestHandler):
     completion_status = {}
     ready_instances = set()  # Track instances that are ready to start
     total_expected_instances = 0  # Total number of instances expected
+    instance_status = {}  # Track current status of each instance
     run_name = None
     log_files = {}  # Track open log files for streaming
+    last_display_time = 0  # For throttling status updates
+    
+    # Status stages
+    STATUS_STARTING = "starting"
+    STATUS_UPDATING = "updating"
+    STATUS_INSTALLING = "installing"
+    STATUS_DOWNLOADING = "downloading"
+    STATUS_READY = "ready"
+    STATUS_WAITING = "waiting_sync"
+    STATUS_SEEDING = "seeding"
+    STATUS_DOWNLOADING_BT = "downloading_bt"
+    STATUS_COMPLETED = "completed"
+    STATUS_ERROR = "error"
     
     @classmethod
     def set_run_name(cls, run_name):
@@ -132,6 +146,103 @@ class LogHandler(BaseHTTPRequestHandler):
     def set_total_instances(cls, total):
         cls.total_expected_instances = total
         cls.ready_instances = set()  # Reset ready instances
+        cls.instance_status = {}  # Reset instance status
+    
+    @classmethod
+    def update_instance_status(cls, instance_id, status, progress=None, message=None):
+        """Update instance status and refresh display"""
+        cls.instance_status[instance_id] = {
+            'status': status,
+            'progress': progress,
+            'message': message or '',
+            'timestamp': time.time()
+        }
+        
+        # Throttle display updates to avoid spam
+        current_time = time.time()
+        if current_time - cls.last_display_time > 1.0:  # Update max once per second
+            cls.display_status_dashboard()
+            cls.last_display_time = current_time
+    
+    @classmethod
+    def display_status_dashboard(cls):
+        """Display a clean status dashboard"""
+        import os
+        
+        # Clear screen and move cursor to top
+        print('\033[2J\033[H', end='')
+        
+        print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 BitTorrent Network Status Dashboard{COLOR_RESET}")
+        print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 Run: {cls.run_name}{COLOR_RESET}")
+        print("=" * 80)
+        
+        # Group by region and role
+        regions = {}
+        for instance_id, info in cls.instance_status.items():
+            # Parse instance_id format: "region-role-index"
+            parts = instance_id.split('-')
+            if len(parts) >= 3:
+                region = parts[0]
+                role = parts[1]
+                if region not in regions:
+                    regions[region] = {'seeders': [], 'leechers': []}
+                regions[region][role + 's'].append((instance_id, info))
+        
+        for region_name, roles in regions.items():
+            print(f"\n{COLOR_BOLD}{COLOR_BLUE}🌍 {region_name.upper()}{COLOR_RESET}")
+            
+            # Show seeders
+            if roles['seeders']:
+                print(f"  {COLOR_GREEN}🌱 Seeders:{COLOR_RESET}")
+                for instance_id, info in roles['seeders']:
+                    status_emoji, status_text = cls._get_status_display(info['status'], info.get('progress'))
+                    print(f"    {status_emoji} {instance_id}: {status_text}")
+            
+            # Show leechers  
+            if roles['leechers']:
+                print(f"  {COLOR_BLUE}📥 Leechers:{COLOR_RESET}")
+                for instance_id, info in roles['leechers']:
+                    status_emoji, status_text = cls._get_status_display(info['status'], info.get('progress'))
+                    print(f"    {status_emoji} {instance_id}: {status_text}")
+        
+        # Summary
+        total_instances = len(cls.instance_status)
+        ready_count = len(cls.ready_instances)
+        completed_count = len([i for i in cls.instance_status.values() if i['status'] == cls.STATUS_COMPLETED])
+        
+        print(f"\n{COLOR_BOLD}📊 Summary:{COLOR_RESET}")
+        print(f"  Total: {total_instances}/{cls.total_expected_instances} | Ready: {ready_count} | Completed: {completed_count}")
+        
+        if ready_count >= cls.total_expected_instances and ready_count > 0:
+            print(f"  {COLOR_GREEN}🚀 All instances synchronized - BitTorrent phase active{COLOR_RESET}")
+        elif ready_count > 0:
+            print(f"  {COLOR_YELLOW}🔄 Waiting for synchronization ({ready_count}/{cls.total_expected_instances}){COLOR_RESET}")
+        else:
+            print(f"  {COLOR_CYAN}⚙️ Setup phase in progress{COLOR_RESET}")
+    
+    @classmethod 
+    def _get_status_display(cls, status, progress=None):
+        """Get emoji and text for status display"""
+        status_map = {
+            cls.STATUS_STARTING: ("🔄", "Starting up"),
+            cls.STATUS_UPDATING: ("📦", "Updating system"), 
+            cls.STATUS_INSTALLING: ("⚙️", "Installing packages"),
+            cls.STATUS_DOWNLOADING: ("⬇️", "Downloading files"),
+            cls.STATUS_READY: ("✅", "Setup complete"),
+            cls.STATUS_WAITING: ("⏳", "Waiting for sync"),
+            cls.STATUS_SEEDING: ("🌱", "Seeding"),
+            cls.STATUS_DOWNLOADING_BT: ("📥", f"Downloading {progress}%" if progress else "Downloading"),
+            cls.STATUS_COMPLETED: ("🎉", "Completed"),
+            cls.STATUS_ERROR: ("❌", "Error")
+        }
+        
+        emoji, text = status_map.get(status, ("❓", f"Unknown: {status}"))
+        
+        # Add progress for downloading
+        if status == cls.STATUS_DOWNLOADING_BT and progress is not None:
+            text = f"Downloading {progress:.1f}%"
+            
+        return emoji, text
     
     def do_POST(self):
         if self.path == LOGS_ENDPOINT:
@@ -227,33 +338,102 @@ class LogHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(response).encode())
     
     def _handle_stream(self):
-        # Handle streaming log updates
+        """Handle streaming log updates - now updates status dashboard instead of printing lines"""
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
         
         try:
             data = json.loads(post_data.decode())
             instance_id = data.get('instance_id')
-            log_chunk = data.get('log_chunk', '')
+            log_chunk = data.get('log_chunk', '').strip()
             timestamp = data.get('timestamp', time.time())
             
             if instance_id and log_chunk:
+                # Save to log file
                 run_dir = os.path.join(self.logs_dir, self.run_name)
                 os.makedirs(run_dir, exist_ok=True)
                 log_path = os.path.join(run_dir, f"{instance_id}_stream.log")
                 
-                # Append to streaming log file
                 with open(log_path, 'a') as f:
                     f.write(f"[{datetime.fromtimestamp(timestamp).strftime('%H:%M:%S')}] {log_chunk}\n")
                 
-                # Print live update to console
-                print(f"{COLOR_CYAN}🔄 {instance_id}: {log_chunk.strip()}{COLOR_RESET}")
+                # Parse log chunk to determine status
+                self._parse_log_for_status(instance_id, log_chunk)
                 
         except json.JSONDecodeError:
             pass
         
         self.send_response(HTTP_OK)
         self.end_headers()
+    
+    def _parse_log_for_status(self, instance_id, log_chunk):
+        """Parse log chunk and update instance status accordingly"""
+        log_lower = log_chunk.lower()
+        
+        # Determine role from instance_id
+        is_seeder = 'seeder' in instance_id
+        
+        # Parse different status updates
+        if 'starting setup' in log_lower:
+            self.update_instance_status(instance_id, self.STATUS_STARTING)
+        elif 'system update' in log_lower:
+            self.update_instance_status(instance_id, self.STATUS_UPDATING)
+        elif 'installing' in log_lower and ('packages' in log_lower or 'dependencies' in log_lower):
+            self.update_instance_status(instance_id, self.STATUS_INSTALLING)
+        elif 'downloading' in log_lower and ('torrent' in log_lower or 'seed' in log_lower):
+            self.update_instance_status(instance_id, self.STATUS_DOWNLOADING)
+        elif 'setup complete' in log_lower:
+            self.update_instance_status(instance_id, self.STATUS_READY)
+        elif 'waiting for synchronization' in log_lower or 'waiting for all instances' in log_lower:
+            self.update_instance_status(instance_id, self.STATUS_WAITING)
+        elif 'starting bittorrent client as seeder' in log_lower:
+            self.update_instance_status(instance_id, self.STATUS_SEEDING)
+        elif 'starting bittorrent client as leecher' in log_lower:
+            self.update_instance_status(instance_id, self.STATUS_DOWNLOADING_BT, progress=0)
+        elif 'bittorrent client finished' in log_lower:
+            self.update_instance_status(instance_id, self.STATUS_COMPLETED)
+        # Parse BitTorrent progress for leechers
+        elif not is_seeder and ('downloaded' in log_lower or 'progress' in log_lower or '%' in log_chunk):
+            progress = self._extract_progress(log_chunk)
+            if progress is not None:
+                self.update_instance_status(instance_id, self.STATUS_DOWNLOADING_BT, progress=progress)
+        elif 'error' in log_lower or 'failed' in log_lower:
+            self.update_instance_status(instance_id, self.STATUS_ERROR, message=log_chunk[:50])
+    
+    def _extract_progress(self, log_chunk):
+        """Extract download progress percentage from log chunk"""
+        import re
+        
+        # Look for percentage patterns
+        percent_match = re.search(r'(\d+(?:\.\d+)?)\s*%', log_chunk)
+        if percent_match:
+            return float(percent_match.group(1))
+        
+        # Look for "X/Y bytes" patterns and calculate percentage
+        bytes_match = re.search(r'(\d+(?:\.\d+)?[KMG]?B?)\s*/\s*(\d+(?:\.\d+)?[KMG]?B?)', log_chunk)
+        if bytes_match:
+            try:
+                downloaded = self._parse_bytes(bytes_match.group(1))
+                total = self._parse_bytes(bytes_match.group(2))
+                if total > 0:
+                    return (downloaded / total) * 100
+            except:
+                pass
+        
+        return None
+    
+    def _parse_bytes(self, byte_str):
+        """Parse byte string like '1.5MB' to bytes"""
+        import re
+        match = re.match(r'(\d+(?:\.\d+)?)\s*([KMG]?B?)', byte_str.upper())
+        if not match:
+            return 0
+        
+        value = float(match.group(1))
+        unit = match.group(2)
+        
+        multipliers = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, '': 1}
+        return int(value * multipliers.get(unit, 1))
     
     def _handle_completion(self):
         content_length = int(self.headers['Content-Length'])
