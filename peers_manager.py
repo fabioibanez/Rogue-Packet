@@ -14,9 +14,6 @@ import random
 from typing import Iterable
 
 from bitstring import BitArray
-
-
-from pieces_manager import PiecesManager
 from torrent import Torrent
 from peer_choking_logger import PeerChokingLogger
 from message import Message, Handshake, KeepAlive, Choke, UnChoke, Interested, NotInterested, Have, BitField, Request, PieceMessage, Cancel, Port
@@ -34,8 +31,7 @@ import socket
 
 K_MINUS_1 = 3
 class PeersManager(Thread):    
-    def __init__(self, torrent: Torrent,
-                 pieces_manager: PiecesManager) -> None:
+    def __init__(self, torrent: Torrent) -> None:
         Thread.__init__(self)
         self.peers: list[Peer] = []  # List of connected peers
 
@@ -45,7 +41,6 @@ class PeersManager(Thread):
         self.unchoked_optimistic_peer: Peer | None = None
 
         self.torrent = torrent  # Torrent metadata
-        self.pieces_manager = pieces_manager  # Manages pieces/blocks
         self.is_active: bool = True  # Controls the main thread loop
 
         # Initialize the choking logger

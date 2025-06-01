@@ -5,10 +5,10 @@ __author__ = 'alexisgallepe'
 from dataclasses import dataclass
 import logging
 import time
-from typing import TypeAlias
 from bitstring import BitArray
-from message import BitField, Interested, NotInterested, PieceMessage, Request
+from message import BitField, Interested, PieceMessage, Request
 from peer import Peer
+from peers_manager import PeersManager
 from piece import Piece, PieceFileInfo
 from pubsub import pub
 from torrent import Torrent
@@ -29,8 +29,10 @@ class OutstandingRequest:
         return False
 
 class PiecesManager:
-    def __init__(self, torrent: Torrent):
+    def __init__(self, torrent: Torrent, peers_manager: PeersManager):
         self.torrent = torrent
+        self.peers_manager = peers_manager 
+
         self.bitfield = BitArray(self.torrent.number_of_pieces)
         self.pieces = self._generate_pieces()
         self._outstanding_requests: list[OutstandingRequest] = []
@@ -80,6 +82,9 @@ class PiecesManager:
         # If we've completed all pieces, we'll give data to anyone who requests it!
         # Otherwise, we will deny upload to peers that we are choking
         if not self.all_pieces_completed() and peer.am_choking():
+            return
+        
+        if not self.peers_manager.confirm_send_to_peer(peer):
             return
         
         piece = self.pieces[request.piece_index]

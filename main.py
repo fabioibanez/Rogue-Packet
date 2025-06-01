@@ -39,8 +39,8 @@ class Run(object):
 
         self.torrent = Torrent().load_from_path(path=args.torrent_file)
         self.tracker = Tracker(self.torrent)
-        self.pieces_manager = PiecesManager(self.torrent)
-        self.peers_manager = PeersManager(self.torrent, self.pieces_manager)
+        self.peers_manager = PeersManager(self.torrent)
+        self.pieces_manager = PiecesManager(self.torrent, self.peers_manager)
         self.peers_manager.start()  # This starts the peer manager thread
 
         self._start_plot_thread()
