@@ -56,6 +56,7 @@ class PeersManager(Thread):
 
     def confirm_send_to_peer(self, peer: Peer) -> bool:
         if peer == self.unchoked_optimistic_peer:
+            print(f"confirm_send_to_peer :: {peer}: [optimistic]")
             return True
         # We only send a packet to a peer with probability:
         # (peer.download_rate / max_collective_download_rate)
@@ -65,7 +66,7 @@ class PeersManager(Thread):
             return True
         
         download_rate = peer.stats.calculate_download_rate()
-        print(f"confirm_send_to_peer: {download_rate} / {denom}")
+        print(f"confirm_send_to_peer :: {peer}: {download_rate} / {denom}")
         return random.uniform(0, 1) < download_rate / denom
 
     def broadcast_have(self, piece_index: int, bitfield: BitArray) -> None:
