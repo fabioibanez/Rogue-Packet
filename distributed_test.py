@@ -32,8 +32,8 @@ DEFAULT_CONTROLLER_PORT = 8080  # Default port for controller server if not spec
 
 # Installation Commands
 UPDATE_CMD = "apt-get update"  # Update package lists command (used in generate_user_data)
-INSTALL_PACKAGES_CMD = "apt-get install -y git python3 python3-pip"  # Install required packages (used in generate_user_data)
-INSTALL_DEPS_CMD = "pip3 install -r requirements.txt"  # Install Python dependencies (used in generate_user_data)
+INSTALL_PACKAGES_CMD = "apt-get install -y git python3 python3-pip python3-dev python3-venv build-essential libssl-dev libffi-dev"  # Install required packages (used in generate_user_data)
+INSTALL_DEPS_CMD = "python3 -m pip install -r requirements.txt --timeout 300"  # Install Python dependencies (used in generate_user_data)
 SHUTDOWN_CMD = "shutdown -h now"  # Command to shutdown instance (used in generate_user_data)
 
 # Role Constants
@@ -260,21 +260,21 @@ echo "BITTORRENT_ROLE=$BITTORRENT_ROLE"
 echo "INSTANCE_ID=$INSTANCE_ID"
 
 echo "=== Testing Python imports ==="
-python3 -c "
+python3 -c '
 try:
     import sys
-    print('Python path:', sys.path)
+    print("Python path:", sys.path)
     # Try importing common packages that might be in requirements.txt
-    test_imports = ['requests', 'bcoding', 'bitstring', 'bencode']
+    test_imports = ["requests", "bcoding", "bitstring", "bencode"]
     for pkg in test_imports:
         try:
             __import__(pkg)
-            print(f'✓ {pkg} import successful')
+            print(f"✓ {{pkg}} import successful")
         except ImportError as e:
-            print(f'✗ {pkg} import failed: {e}')
+            print(f"✗ {{pkg}} import failed: {{e}}")
 except Exception as e:
-    print(f'Python test failed: {e}')
-"
+    print(f"Python test failed: {{e}}")
+'
 
 echo "=== Running BitTorrent client ==="
 echo "Command: python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
