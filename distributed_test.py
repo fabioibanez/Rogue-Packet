@@ -234,8 +234,6 @@ class AWSManager:
             self.region_clients[region] = boto3.client(
                 EC2_SERVICE_NAME,
                 region_name=region,
-                aws_access_key_id=self.aws_config['access_key'],
-                aws_secret_access_key=self.aws_config['secret_key']
             )
         return self.region_clients[region]
     
