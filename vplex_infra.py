@@ -24,6 +24,10 @@ class DelayedSingleSwitchTopo(Topo):
             host = self.addHost(f'h{i+1}')
             self.addLink(host, switch, cls=TCLink, delay=self.delay)
 
+
+
+
+
 class BitTorrentMininet:
     """
     A Mininet wrapper for running BitTorrent clients in a simulated network environment.
@@ -54,6 +58,12 @@ class BitTorrentMininet:
         """Check if the seeder file exists when specified."""
         if self.seeder_file and not os.path.exists(self.seeder_file):
             raise FileNotFoundError(f"Seeder file '{self.seeder_file}' not found")
+    
+    def _validate_topology(self):
+        """Validate the topology choice."""
+        if self.topology_name not in self.TOPOLOGY_MAP:
+            available = ', '.join(self.TOPOLOGY_MAP.keys())
+            raise ValueError(f"Invalid topology '{self.topology_name}'. Available: {available}")
         """Validate the topology choice."""
         if self.topology_name not in self.TOPOLOGY_MAP:
             available = ', '.join(self.TOPOLOGY_MAP.keys())
