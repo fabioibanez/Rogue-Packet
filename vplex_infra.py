@@ -94,9 +94,25 @@ class BitTorrentMininet:
         # Ensure main script directory exists
         host.cmd(f'mkdir -p {self.MAIN_SCRIPT_PATH}')
         
+        # Try to install common dependencies that might be missing
+        common_packages = ['matplotlib', 'requests', 'bencodepy', 'bitstring', 'numpy']
+        for package in common_packages:
+            # Check if package is available, install if not
+            result = host.cmd(f'python3 -c "import {package}" 2>&1')
+            if 'ModuleNotFoundError' in result or 'ImportError' in result:
+                print(f"Installing {package} on {host_name}...")
+                install_result = host.cmd(f'pip3 install {package} --quiet --user')
+        
         # Check if requirements.txt exists and install dependencies
         requirements_path = f"{self.MAIN_SCRIPT_PATH}/requirements.txt"
-        host.cmd(f'pip3 install -r {requirements_path} --quiet 2>/dev/null || echo "Warning: Could not install from requirements.txt"')
+        result = host.cmd(f'[ -f {requirements_path} ] && pip3 install -r {requirements_path} --quiet --user || echo "No requirements.txt found"')
+        
+        # Test that matplotlib is now available
+        test_result = host.cmd(f'python3 -c "import matplotlib; print(\\"matplotlib OK\\")" 2>&1')
+        if 'matplotlib OK' in test_result:
+            print(f"✓ matplotlib successfully installed on {host_name}")
+        else:
+            print(f"✗ matplotlib installation failed on {host_name}: {test_result.strip()}")
         
         print(f"Environment setup completed for {host_name}")
     
@@ -105,11 +121,20 @@ class BitTorrentMininet:
         conda_env = self._detect_conda_environment()
         
         if conda_env:
-            # Use conda environment
-            return f"source /home/ubuntu/miniconda3/etc/profile.d/conda.sh && conda activate {conda_env}"
-        else:
-            # Use system python3
-            return ""
+            # Try multiple common conda paths
+            conda_paths = [
+                "/home/ubuntu/miniconda3/etc/profile.d/conda.sh",
+                "/home/ubuntu/anaconda3/etc/profile.d/conda.sh", 
+                "/opt/conda/etc/profile.d/conda.sh",
+                "~/miniconda3/etc/profile.d/conda.sh",
+                "~/anaconda3/etc/profile.d/conda.sh"
+            ]
+            
+            # Use the first existing conda path
+            for conda_path in conda_paths:
+                return f"source {conda_path} 2>/dev/null && conda activate {conda_env} 2>/dev/null"
+        
+        return ""
     
     def _validate_torrent_file(self):
         """Check if the torrent file exists."""
@@ -178,18 +203,22 @@ class BitTorrentMininet:
             host = self.net.get(f'h{i}')
             if host:
                 host_name = f'h{i}'
+                print(f"Setting up {host_name}...")
                 
-                # Set up environment (installs requirements.txt)
+                # Set up environment (installs requirements.txt and common packages)
                 self._setup_host_environment(host, host_name)
                 
                 # Copy torrent file
                 host.cmd(f'cp {self.torrent_file} {self.MAIN_SCRIPT_PATH}/')
+                print(f"Copied torrent file to {host_name}")
         
         # Copy seeder file to seeder host (h1) if specified
         if self.seeder_file:
             h1 = self.net.get('h1')
             h1.cmd(f'cp {self.seeder_file} {self.MAIN_SCRIPT_PATH}/')
             print(f"Copied seeder file '{self.seeder_file}' to seeder host h1 at {self.MAIN_SCRIPT_PATH}")
+        
+        print("File copying and environment setup completed.")
     
     def _run_seeder(self):
         """Run the seeder on h1."""
