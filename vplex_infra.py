@@ -40,7 +40,7 @@ class BitTorrentMininet:
     MAIN_SCRIPT_PATH = "/home/ubuntu/Rogue-Packet"
     
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
-                 num_hosts=3, topology='single', delay='0ms', seeder_file=None):
+                 num_hosts=3, topology='single', delay='0ms', seeder_file=None, conda_env=None):
         self.torrent_file = torrent_file
         self.verbose = verbose
         self.delete_torrent = delete_torrent
@@ -49,6 +49,7 @@ class BitTorrentMininet:
         self.topology_name = topology
         self.delay = delay
         self.seeder_file = seeder_file
+        self.conda_env = conda_env
         self.net = None
         self.log_dir = self._create_log_directory()  # Keep for backward compatibility
     
@@ -73,6 +74,42 @@ class BitTorrentMininet:
         self.mininet_log_dir = mininet_log_dir
         
         return host_log_dir
+    
+    def _detect_conda_environment(self):
+        """Detect the current conda environment if not specified."""
+        if self.conda_env:
+            return self.conda_env
+            
+        # Try to detect current conda environment
+        conda_env = os.environ.get('CONDA_DEFAULT_ENV')
+        if conda_env and conda_env != 'base':
+            print(f"Detected conda environment: {conda_env}")
+            return conda_env
+        return None
+    
+    def _setup_host_environment(self, host, host_name):
+        """Set up the Python environment on a host."""
+        print(f"Setting up environment on {host_name}...")
+        
+        # Ensure main script directory exists
+        host.cmd(f'mkdir -p {self.MAIN_SCRIPT_PATH}')
+        
+        # Check if requirements.txt exists and install dependencies
+        requirements_path = f"{self.MAIN_SCRIPT_PATH}/requirements.txt"
+        host.cmd(f'pip3 install -r {requirements_path} --quiet 2>/dev/null || echo "Warning: Could not install from requirements.txt"')
+        
+        print(f"Environment setup completed for {host_name}")
+    
+    def _build_environment_command(self):
+        """Build the environment activation command."""
+        conda_env = self._detect_conda_environment()
+        
+        if conda_env:
+            # Use conda environment
+            return f"source /home/ubuntu/miniconda3/etc/profile.d/conda.sh && conda activate {conda_env}"
+        else:
+            # Use system python3
+            return ""
     
     def _validate_torrent_file(self):
         """Check if the torrent file exists."""
@@ -123,18 +160,29 @@ class BitTorrentMininet:
         if self.seed or is_seeder:
             cmd_parts.append('-s')
         
-        return ' '.join(cmd_parts)
+        base_cmd = ' '.join(cmd_parts)
+        
+        # Add environment activation if conda environment is detected
+        env_cmd = self._build_environment_command()
+        if env_cmd:
+            return f"{env_cmd} && {base_cmd}"
+        else:
+            return base_cmd
     
     def _copy_files_to_hosts(self):
-        """Copy torrent file to all hosts and seeder file to seeder host."""
-        print("Copying files to hosts...")
+        """Copy torrent file to all hosts, seeder file to seeder host, and set up environments."""
+        print("Copying files to hosts and setting up environments...")
         
-        # Copy torrent file to the main script directory for all hosts
+        # Copy torrent file to the main script directory for all hosts and set up environment
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                # Ensure the main script directory exists and copy torrent file
-                host.cmd(f'mkdir -p {self.MAIN_SCRIPT_PATH}')
+                host_name = f'h{i}'
+                
+                # Set up environment (installs requirements.txt)
+                self._setup_host_environment(host, host_name)
+                
+                # Copy torrent file
                 host.cmd(f'cp {self.torrent_file} {self.MAIN_SCRIPT_PATH}/')
         
         # Copy seeder file to seeder host (h1) if specified
@@ -211,6 +259,13 @@ class BitTorrentMininet:
         
         # Copy necessary files to hosts
         self._copy_files_to_hosts()
+        
+        # Show environment information
+        conda_env = self._detect_conda_environment()
+        if conda_env:
+            print(f"Using conda environment: {conda_env}")
+        else:
+            print("Using system Python3 with pip-installed requirements")
         
         # Start seeder first
         if self.seeder_file:
@@ -344,6 +399,8 @@ def _parse_arguments():
                         help='Link delay (e.g., 10ms, 100ms, 1s) (default: 0ms)')
     parser.add_argument('--seeder-file', 
                         help='Path to the complete file for seeding (seeder will have this file)')
+    parser.add_argument('--conda-env', 
+                        help='Conda environment name to activate (auto-detected if not specified)')
     
     return parser.parse_args()
 
@@ -361,7 +418,8 @@ def main():
         num_hosts=args.hosts,
         topology=args.topology,
         delay=args.delay,
-        seeder_file=args.seeder_file
+        seeder_file=args.seeder_file,
+        conda_env=args.conda_env
     )
     
     bt_mininet.run()
