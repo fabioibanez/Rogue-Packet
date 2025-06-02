@@ -1,5 +1,4 @@
 #!/usr/bin/python
-from typing import Optional
 from mininet.topo import Topo, SingleSwitchTopo
 from mininet.net import Mininet
 from mininet.link import TCLink
@@ -48,7 +47,7 @@ class BitTorrentMininet:
     
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
                  num_seeders=1, num_leechers=2, topology='single', delay='0ms', seeder_file=None, 
-                 auto_install=True, mock_tracker_fname: Optional[str] = None):
+                 auto_install=True):
         self.torrent_file = torrent_file
         self.verbose = verbose
         self.delete_torrent = delete_torrent
@@ -63,15 +62,6 @@ class BitTorrentMininet:
         self.net = None
         self.mock_tracker_file = None  # Will be set when created
         self.log_dir = self._create_log_directory()  # Keep for backward compatibility
-        
-        self.mock_tracker = (mock_tracker_fname is not None)
-        
-        # If the path to the mock tracker exists, delete it
-        if os.path.exists(mock_tracker_fname):
-            print(f"> Removing existing mock tracker file: {mock_tracker_fname}")
-            os.remove(mock_tracker_fname)
-        
-        self.mock_tracker_fname = mock_tracker_fname
     
     def _install_requirements(self):
         """Install packages from requirements.txt if it exists."""
@@ -230,9 +220,6 @@ class BitTorrentMininet:
             cmd_parts.append('-d')
         if self.seed or is_seeder:
             cmd_parts.append('-s')
-        if self.mock_tracker:
-            cmd_parts.append('--mock-tracker')
-            cmd_parts.append(self.mock_tracker_fname)
         
         return ' '.join(cmd_parts)
     
