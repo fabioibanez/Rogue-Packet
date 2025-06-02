@@ -8,6 +8,7 @@ import argparse
 import time
 import os
 import datetime
+import shutil
 
 
 class DelayedSingleSwitchTopo(Topo):
@@ -46,18 +47,29 @@ class BitTorrentMininet:
         self.delay = delay
         self.seeder_file = seeder_file
         self.net = None
-        self.log_dir = self._create_log_directory()
+        self.log_dir = self._create_log_directory()  # Keep for backward compatibility
     
     def _create_log_directory(self):
         """Create a unique log directory for this run."""
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         torrent_name = os.path.splitext(os.path.basename(self.torrent_file))[0]
-        log_dir = f"logs/{torrent_name}_{timestamp}"
         
-        # Create logs directory and specific run directory
-        os.makedirs(log_dir, exist_ok=True)
-        print(f"Created log directory: {log_dir}")
-        return log_dir
+        # Create log directory on host filesystem
+        host_log_dir = f"logs/{torrent_name}_{timestamp}"
+        os.makedirs(host_log_dir, exist_ok=True)
+        
+        # Also create log directory accessible to Mininet hosts
+        mininet_log_dir = f"/tmp/mininet_logs_{timestamp}"
+        os.makedirs(mininet_log_dir, exist_ok=True)
+        
+        print(f"Created log directory: {host_log_dir}")
+        print(f"Mininet log directory: {mininet_log_dir}")
+        
+        # Store both paths
+        self.host_log_dir = host_log_dir
+        self.mininet_log_dir = mininet_log_dir
+        
+        return host_log_dir
     
     def _validate_torrent_file(self):
         """Check if the torrent file exists."""
@@ -133,8 +145,8 @@ class BitTorrentMininet:
         
         print(f"Starting seeder on h1 ({h1.IP()}): {seeder_cmd}")
         
-        # Create log file for seeder
-        seeder_log = os.path.join(self.log_dir, "h1_seeder.log")
+        # Create log file for seeder (accessible to Mininet host)
+        seeder_log = os.path.join(self.mininet_log_dir, "h1_seeder.log")
         
         # Change to torrents directory and run seeder in background with output redirection
         full_cmd = f'cd /tmp/torrents && {seeder_cmd} > {seeder_log} 2>&1 &'
@@ -155,8 +167,8 @@ class BitTorrentMininet:
                 leecher_cmd = self._build_bittorrent_command(host.IP(), is_seeder=False)
                 print(f"Starting leecher on h{i} ({host.IP()}): {leecher_cmd}")
                 
-                # Create log file for this leecher
-                leecher_log = os.path.join(self.log_dir, f"h{i}_leecher.log")
+                # Create log file for this leecher (accessible to Mininet host)
+                leecher_log = os.path.join(self.mininet_log_dir, f"h{i}_leecher.log")
                 
                 # Change to torrents directory and run leecher with output redirection
                 full_cmd = f'cd /tmp/torrents && {leecher_cmd} > {leecher_log} 2>&1'
@@ -166,6 +178,18 @@ class BitTorrentMininet:
                 print(f"Leecher h{i} output will be logged to: {leecher_log}")
         
         return leecher_processes
+    
+    def _copy_logs_to_host(self):
+        """Copy log files from Mininet directory to host directory."""
+        print(f"Copying logs from {self.mininet_log_dir} to {self.host_log_dir}")
+        
+        # Copy all log files
+        for filename in os.listdir(self.mininet_log_dir):
+            if filename.endswith('.log'):
+                src = os.path.join(self.mininet_log_dir, filename)
+                dst = os.path.join(self.host_log_dir, filename)
+                shutil.copy2(src, dst)
+                print(f"Copied {filename}")
     
     def _run_bittorrent_clients(self):
         """Run BitTorrent seeder and leechers."""
@@ -193,7 +217,7 @@ class BitTorrentMininet:
         # Wait for leechers to complete (or user interruption)
         try:
             print("BitTorrent clients running. Press Ctrl+C to stop.")
-            print(f"All logs are being written to: {self.log_dir}")
+            print(f"All logs are being written to: {self.host_log_dir}")
             
             while True:
                 time.sleep(1)
@@ -201,11 +225,12 @@ class BitTorrentMininet:
                 active_leechers = [name for name, proc, log_file in leecher_processes if proc.poll() is None]
                 if not active_leechers:
                     print("All leechers completed.")
+                    self._copy_logs_to_host()
                     self._create_summary_log(leecher_processes)
                     break
                     
             # Show completion status
-            print(f"\nRun completed. Logs available in: {self.log_dir}")
+            print(f"\nRun completed. Logs available in: {self.host_log_dir}")
             self._print_log_summary()
             
         except KeyboardInterrupt:
@@ -214,11 +239,12 @@ class BitTorrentMininet:
                 if proc.poll() is None:
                     proc.terminate()
                     print(f"Stopped {name}")
+            self._copy_logs_to_host()
             self._create_summary_log(leecher_processes, interrupted=True)
     
     def _create_summary_log(self, leecher_processes, interrupted=False):
         """Create a summary log with run information."""
-        summary_file = os.path.join(self.log_dir, "run_summary.log")
+        summary_file = os.path.join(self.host_log_dir, "run_summary.log")
         
         with open(summary_file, 'w') as f:
             f.write(f"BitTorrent Mininet Run Summary\n")
@@ -246,16 +272,16 @@ class BitTorrentMininet:
     
     def _print_log_summary(self):
         """Print a summary of available log files."""
-        print(f"\nLog files created in {self.log_dir}:")
-        if os.path.exists(os.path.join(self.log_dir, "h1_seeder.log")):
+        print(f"\nLog files created in {self.host_log_dir}:")
+        if os.path.exists(os.path.join(self.host_log_dir, "h1_seeder.log")):
             print(f"  - h1_seeder.log (seeder output)")
         
         for i in range(2, self.num_hosts + 1):
-            log_file = os.path.join(self.log_dir, f"h{i}_leecher.log")
+            log_file = os.path.join(self.host_log_dir, f"h{i}_leecher.log")
             if os.path.exists(log_file):
                 print(f"  - h{i}_leecher.log (leecher output)")
         
-        summary_file = os.path.join(self.log_dir, "run_summary.log")
+        summary_file = os.path.join(self.host_log_dir, "run_summary.log")
         if os.path.exists(summary_file):
             print(f"  - run_summary.log (run configuration and summary)")
     
@@ -272,6 +298,11 @@ class BitTorrentMininet:
             print("Stopping network...")
             self.net.stop()
             self.net = None
+        
+        # Clean up temporary mininet log directory
+        if hasattr(self, 'mininet_log_dir') and os.path.exists(self.mininet_log_dir):
+            shutil.rmtree(self.mininet_log_dir)
+            print(f"Cleaned up temporary log directory: {self.mininet_log_dir}")
     
     def run(self):
         """Complete workflow: validate, create network, run clients, cleanup."""
