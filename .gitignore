@@ -78,3 +78,6 @@ target/
 
 
 .vscode/
+
+*.lock
+*.json
