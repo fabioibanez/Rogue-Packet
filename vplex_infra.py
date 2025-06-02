@@ -36,9 +36,6 @@ class BitTorrentMininet:
         'single': DelayedSingleSwitchTopo
     }
     
-    # Absolute path where main.py script should be run from
-    MAIN_SCRIPT_PATH = "/home/ubuntu/Rogue-Packet"
-    
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
                  num_hosts=3, topology='single', delay='0ms', seeder_file=None):
         self.torrent_file = torrent_file
@@ -152,9 +149,7 @@ class BitTorrentMininet:
     
     def _build_bittorrent_command(self, host_ip, is_seeder=False):
         """Build the command string for running the BitTorrent client."""
-        # Use just the filename since the torrent file will be copied to the working directory
-        torrent_filename = os.path.basename(self.torrent_file)
-        cmd_parts = ['python3', '-m', 'main', torrent_filename]
+        cmd_parts = ['python3', '-m', 'main', self.torrent_file]
         
         # Add local IP argument
         cmd_parts.extend(['--local-ip', host_ip])
@@ -179,29 +174,19 @@ class BitTorrentMininet:
         """Copy torrent file to all hosts, seeder file to seeder host, and set up virtual environments."""
         print("Copying files to hosts and setting up virtual environments...")
         
-        # Copy torrent file to the main script directory for all hosts and set up venv
+        # Copy torrent file to all hosts
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                host_name = f'h{i}'
-                print(f"Setting up {host_name}...")
-                
-                # Set up virtual environment and install requirements
-                success = self._setup_host_environment(host, host_name)
-                if not success:
-                    print(f"⚠ Environment setup failed for {host_name}, but continuing...")
-                
-                # Copy torrent file
-                host.cmd(f'cp {self.torrent_file} {self.MAIN_SCRIPT_PATH}/')
-                print(f"✓ Copied torrent file to {host_name}")
+                # Create a shared directory and copy torrent file
+                host.cmd(f'mkdir -p /tmp/torrents')
+                host.cmd(f'cp {self.torrent_file} /tmp/torrents/')
         
         # Copy seeder file to seeder host (h1) if specified
         if self.seeder_file:
             h1 = self.net.get('h1')
-            h1.cmd(f'cp {self.seeder_file} {self.MAIN_SCRIPT_PATH}/')
-            print(f"✓ Copied seeder file '{self.seeder_file}' to seeder host h1")
-        
-        print("✓ File copying and virtual environment setup completed.")
+            h1.cmd(f'cp {self.seeder_file} /tmp/torrents/')
+            print(f"Copied seeder file '{self.seeder_file}' to seeder host h1")
     
     def _run_seeder(self):
         """Run the seeder on h1."""
@@ -213,8 +198,8 @@ class BitTorrentMininet:
         # Create log file for seeder (accessible to Mininet host)
         seeder_log = os.path.join(self.mininet_log_dir, "h1_seeder.log")
         
-        # Change to main script directory and run seeder in background with output redirection
-        full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {seeder_cmd} > {seeder_log} 2>&1 &'
+        # Change to torrents directory and run seeder in background with output redirection
+        full_cmd = f'cd /tmp/torrents && {seeder_cmd} > {seeder_log} 2>&1 &'
         h1.cmd(full_cmd)
         
         print(f"Seeder output will be logged to: {seeder_log}")
@@ -235,8 +220,8 @@ class BitTorrentMininet:
                 # Create log file for this leecher (accessible to Mininet host)
                 leecher_log = os.path.join(self.mininet_log_dir, f"h{i}_leecher.log")
                 
-                # Change to main script directory and run leecher with output redirection
-                full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {leecher_cmd} > {leecher_log} 2>&1'
+                # Change to torrents directory and run leecher with output redirection
+                full_cmd = f'cd /tmp/torrents && {leecher_cmd} > {leecher_log} 2>&1'
                 process = host.popen(full_cmd, shell=True)
                 leecher_processes.append((f'h{i}', process, leecher_log))
                 
