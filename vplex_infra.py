@@ -204,7 +204,8 @@ class BitTorrentMininet:
         self.mock_tracker_path = os.path.join(self.MAIN_SCRIPT_PATH, mock_tracker_filename)
         return self.mock_tracker_path
     
-    def _build_bittorrent_command(self, host_ip, is_seeder=False):
+    # add a parameter for the parent working directory
+    def _build_bittorrent_command(self, host_ip, is_seeder=False, working_dir=None):
         """Build the command string for running the BitTorrent client."""
         # Use just the filename since the torrent file will be copied to the working directory
         torrent_filename = os.path.basename(self.torrent_file)
@@ -226,7 +227,12 @@ class BitTorrentMininet:
         if self.seed or is_seeder:
             cmd_parts.append('-s')
         
-        return ' '.join(cmd_parts)
+        command = ' '.join(cmd_parts)
+        if working_dir:
+            return f'cd {working_dir} && {command}'
+        else:
+            return f'cd {self.MAIN_SCRIPT_PATH} && {command}'
+
     
     def _copy_files_to_hosts(self):
         """Copy all necessary files to hosts."""
@@ -300,15 +306,24 @@ class BitTorrentMininet:
         for i in range(self.num_seeders + 1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                leecher_cmd = self._build_bittorrent_command(host.IP(), is_seeder=False)
+                working_dir = os.path.join(self.MAIN_SCRIPT_PATH, f'leecher_{i}')
+                host.cmd(f'mkdir -p {working_dir}')
+                host.cmd(f'cp {self.torrent_file} {working_dir}/')
+
+                if self.mock_tracker_path and os.path.exists(self.mock_tracker_path):
+                    host.cmd(f'cp {self.mock_tracker_path} {working_dir}/')
+
+                leecher_cmd = self._build_bittorrent_command(host.IP(), is_seeder=False, working_dir=working_dir)
+
                 leecher_log = os.path.join(self.host_log_dir, f"h{i}_leecher.log")
                 
                 print(f"  {Colors.network(f'h{i}')} ({host.IP()}) → {Colors.file_op(f'h{i}_leecher.log')}")
                 if self.verbose:
                     print(f"    Command: {leecher_cmd}")
                 
-                full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {leecher_cmd} > {leecher_log} 2>&1'
+                full_cmd = f'{leecher_cmd} > {leecher_log} 2>&1'
                 process = host.popen(full_cmd, shell=True)
+
                 leecher_processes.append((f'h{i}', process, leecher_log))
         
         return leecher_processes
@@ -579,7 +594,7 @@ def main():
         delay=args.delay,
         seeder_file=args.seeder_file,
         auto_install=not args.no_auto_install,
-        interpreter=args.interpreter
+        interpreter=args.interpreter or "python3"
     )
     
     bt_mininet.run()
