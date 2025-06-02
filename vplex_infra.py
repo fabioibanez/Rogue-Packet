@@ -118,6 +118,9 @@ class BitTorrentMininet:
         """Check if the torrent file exists."""
         if not os.path.exists(self.torrent_file):
             raise FileNotFoundError(f"Torrent file '{self.torrent_file}' not found")
+        """Check if the torrent file exists."""
+        if not os.path.exists(self.torrent_file):
+            raise FileNotFoundError(f"Torrent file '{self.torrent_file}' not found")
     
     def _validate_seeder_file(self):
         """Check if the seeder file exists when specified."""
