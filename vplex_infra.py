@@ -9,6 +9,8 @@ import time
 import os
 import datetime
 import shutil
+import subprocess
+import sys
 
 
 class DelayedSingleSwitchTopo(Topo):
@@ -39,8 +41,12 @@ class BitTorrentMininet:
     # Absolute path where main.py script should be run from
     MAIN_SCRIPT_PATH = "/home/ubuntu/Rogue-Packet"
     
+    # Path to requirements.txt
+    REQUIREMENTS_PATH = "/home/ubuntu/Rogue-Packet/requirements.txt"
+    
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
-                 num_hosts=3, topology='single', delay='0ms', seeder_file=None):
+                 num_hosts=3, topology='single', delay='0ms', seeder_file=None, 
+                 auto_install=True):
         self.torrent_file = torrent_file
         self.verbose = verbose
         self.delete_torrent = delete_torrent
@@ -49,8 +55,57 @@ class BitTorrentMininet:
         self.topology_name = topology
         self.delay = delay
         self.seeder_file = seeder_file
+        self.auto_install = auto_install
         self.net = None
         self.log_dir = self._create_log_directory()  # Keep for backward compatibility
+    
+    def _install_requirements(self):
+        """Install packages from requirements.txt if it exists."""
+        if not self.auto_install:
+            print("Auto-install disabled, skipping package installation")
+            return
+            
+        if not os.path.exists(self.REQUIREMENTS_PATH):
+            print(f"Requirements file not found at {self.REQUIREMENTS_PATH}, skipping package installation")
+            return
+        
+        print(f"Installing packages from {self.REQUIREMENTS_PATH}...")
+        
+        try:
+            # Try pip3 first (most common for Mininet)
+            result = subprocess.run([
+                'sudo', 'pip3', 'install', '-r', self.REQUIREMENTS_PATH
+            ], capture_output=True, text=True, timeout=300)
+            
+            if result.returncode == 0:
+                print("✓ Packages installed successfully with pip3")
+                if self.verbose:
+                    print("Installation output:", result.stdout)
+            else:
+                print("⚠ pip3 installation had issues, trying pip...")
+                if self.verbose:
+                    print("pip3 stderr:", result.stderr)
+                
+                # Fallback to regular pip
+                result = subprocess.run([
+                    'sudo', 'pip', 'install', '-r', self.REQUIREMENTS_PATH
+                ], capture_output=True, text=True, timeout=300)
+                
+                if result.returncode == 0:
+                    print("✓ Packages installed successfully with pip")
+                    if self.verbose:
+                        print("Installation output:", result.stdout)
+                else:
+                    print("⚠ Package installation failed")
+                    print("Error:", result.stderr)
+                    print("Continuing anyway - some functionality may not work")
+                    
+        except subprocess.TimeoutExpired:
+            print("⚠ Package installation timed out after 5 minutes")
+            print("Continuing anyway - some functionality may not work")
+        except Exception as e:
+            print(f"⚠ Error during package installation: {e}")
+            print("Continuing anyway - some functionality may not work")
     
     def _create_log_directory(self):
         """Create a unique log directory for this run."""
@@ -261,6 +316,7 @@ class BitTorrentMininet:
             f.write(f"Number of hosts: {self.num_hosts}\n")
             f.write(f"Network delay: {self.delay}\n")
             f.write(f"Verbose mode: {self.verbose}\n")
+            f.write(f"Auto-install: {self.auto_install}\n")
             f.write(f"Status: {'INTERRUPTED' if interrupted else 'COMPLETED'}\n")
             f.write(f"\nHost Information:\n")
             f.write(f"h1 (seeder): {self.net.get('h1').IP() if self.net else 'N/A'}\n")
@@ -312,6 +368,9 @@ class BitTorrentMininet:
     def run(self):
         """Complete workflow: validate, create network, run clients, cleanup."""
         try:
+            # Install required packages first
+            self._install_requirements()
+            
             self._validate_torrent_file()
             self._validate_seeder_file()
             self._validate_topology()
@@ -344,6 +403,8 @@ def _parse_arguments():
                         help='Link delay (e.g., 10ms, 100ms, 1s) (default: 0ms)')
     parser.add_argument('--seeder-file', 
                         help='Path to the complete file for seeding (seeder will have this file)')
+    parser.add_argument('--no-auto-install', action='store_true',
+                        help='Disable automatic package installation from requirements.txt')
     
     return parser.parse_args()
 
@@ -361,7 +422,8 @@ def main():
         num_hosts=args.hosts,
         topology=args.topology,
         delay=args.delay,
-        seeder_file=args.seeder_file
+        seeder_file=args.seeder_file,
+        auto_install=not args.no_auto_install
     )
     
     bt_mininet.run()
