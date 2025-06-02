@@ -223,7 +223,7 @@ class BitTorrentMininet:
             with open(self.mock_tracker_path, 'w') as f:
                 json.dump(peers_list, f, indent=2)
             
-            print(Colors.success(f"Created mock tracker: {mock_tracker_filename}"))
+            print(Colors.success(f"Created mock tracker: {self.mock_tracker_path}"))
             print(Colors.info(f"Total peers: {len(peers_list)} ({self.num_seeders} seeders, {self.num_leechers} leechers)"))
             return mock_tracker_filename
             
@@ -492,7 +492,7 @@ class BitTorrentMininet:
         if self.mock_tracker_path and os.path.exists(self.mock_tracker_path):
             try:
                 os.remove(self.mock_tracker_path)
-                print(f"  ✓ Removed mock tracker: {os.path.basename(self.mock_tracker_path)}")
+                print(f"  ✓ Removed mock tracker: {self.mock_tracker_path}")
             except Exception as e:
                 print(f"  ⚠ Could not remove mock tracker: {e}")
         
