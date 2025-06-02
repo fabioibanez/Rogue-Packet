@@ -94,7 +94,7 @@ class BitTorrentMininet:
     
     def _build_bittorrent_command(self, host_ip, is_seeder=False):
         """Build the command string for running the BitTorrent client."""
-        cmd_parts = ['python', 'main.py', self.torrent_file]
+        cmd_parts = ['python3', '-m', 'main', self.torrent_file]
         
         # Add local IP argument
         cmd_parts.extend(['--local-ip', host_ip])
