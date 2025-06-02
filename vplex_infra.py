@@ -36,6 +36,9 @@ class BitTorrentMininet:
         'single': DelayedSingleSwitchTopo
     }
     
+    # Absolute path where main.py script should be run from
+    MAIN_SCRIPT_PATH = "/home/ubuntu/Rogue-Packet"
+    
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
                  num_hosts=3, topology='single', delay='0ms', seeder_file=None):
         self.torrent_file = torrent_file
@@ -47,7 +50,6 @@ class BitTorrentMininet:
         self.delay = delay
         self.seeder_file = seeder_file
         self.net = None
-        self.venv_path = f"{self.MAIN_SCRIPT_PATH}/venv"
         self.log_dir = self._create_log_directory()  # Keep for backward compatibility
     
     def _create_log_directory(self):
@@ -72,49 +74,7 @@ class BitTorrentMininet:
         
         return host_log_dir
     
-    def _setup_host_environment(self, host, host_name):
-        """Set up a virtual environment on a host and install requirements."""
-        print(f"Setting up virtual environment on {host_name}...")
-        
-        # Ensure main script directory exists
-        host.cmd(f'mkdir -p {self.MAIN_SCRIPT_PATH}')
-        
-        # Create virtual environment
-        print(f"Creating venv on {host_name}...")
-        venv_result = host.cmd(f'cd {self.MAIN_SCRIPT_PATH} && python3 -m venv venv')
-        
-        # Check if venv was created successfully
-        venv_check = host.cmd(f'[ -f {self.venv_path}/bin/python ] && echo "venv_ok" || echo "venv_failed"')
-        if 'venv_failed' in venv_check:
-            print(f"✗ Failed to create venv on {host_name}")
-            return False
-        
-        print(f"✓ Virtual environment created on {host_name}")
-        
-        # Upgrade pip in venv
-        host.cmd(f'{self.venv_path}/bin/python -m pip install --upgrade pip --quiet')
-        
-        # Install requirements.txt if it exists
-        requirements_path = f"{self.MAIN_SCRIPT_PATH}/requirements.txt"
-        req_check = host.cmd(f'[ -f {requirements_path} ] && echo "req_exists" || echo "req_missing"')
-        
-        if 'req_exists' in req_check:
-            print(f"Installing requirements.txt on {host_name}...")
-            install_result = host.cmd(f'{self.venv_path}/bin/pip install -r {requirements_path} --quiet')
-            print(f"✓ Requirements installed on {host_name}")
-        else:
-            print(f"⚠ No requirements.txt found at {requirements_path}")
-        
-        # Test critical imports
-        test_result = host.cmd(f'{self.venv_path}/bin/python -c "import sys; print(\\"Python:\\", sys.version)" 2>&1')
-        print(f"✓ Environment setup completed for {host_name}: {test_result.strip()}")
-        
-        return True
-    
     def _validate_torrent_file(self):
-        """Check if the torrent file exists."""
-        if not os.path.exists(self.torrent_file):
-            raise FileNotFoundError(f"Torrent file '{self.torrent_file}' not found")
         """Check if the torrent file exists."""
         if not os.path.exists(self.torrent_file):
             raise FileNotFoundError(f"Torrent file '{self.torrent_file}' not found")
@@ -149,7 +109,9 @@ class BitTorrentMininet:
     
     def _build_bittorrent_command(self, host_ip, is_seeder=False):
         """Build the command string for running the BitTorrent client."""
-        cmd_parts = ['python3', '-m', 'main', self.torrent_file]
+        # Use just the filename since the torrent file will be copied to the working directory
+        torrent_filename = os.path.basename(self.torrent_file)
+        cmd_parts = ['python3', '-m', 'main', torrent_filename]
         
         # Add local IP argument
         cmd_parts.extend(['--local-ip', host_ip])
@@ -161,32 +123,25 @@ class BitTorrentMininet:
         if self.seed or is_seeder:
             cmd_parts.append('-s')
         
-        base_cmd = ' '.join(cmd_parts)
-        
-        # Add environment activation if conda environment is detected
-        env_cmd = self._build_environment_command()
-        if env_cmd:
-            return f"{env_cmd} && {base_cmd}"
-        else:
-            return base_cmd
+        return ' '.join(cmd_parts)
     
     def _copy_files_to_hosts(self):
-        """Copy torrent file to all hosts, seeder file to seeder host, and set up virtual environments."""
-        print("Copying files to hosts and setting up virtual environments...")
+        """Copy torrent file to all hosts and seeder file to seeder host."""
+        print("Copying files to hosts...")
         
-        # Copy torrent file to all hosts
+        # Copy torrent file to the main script directory for all hosts
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                # Create a shared directory and copy torrent file
-                host.cmd(f'mkdir -p /tmp/torrents')
-                host.cmd(f'cp {self.torrent_file} /tmp/torrents/')
+                # Ensure the main script directory exists and copy torrent file
+                host.cmd(f'mkdir -p {self.MAIN_SCRIPT_PATH}')
+                host.cmd(f'cp {self.torrent_file} {self.MAIN_SCRIPT_PATH}/')
         
         # Copy seeder file to seeder host (h1) if specified
         if self.seeder_file:
             h1 = self.net.get('h1')
-            h1.cmd(f'cp {self.seeder_file} /tmp/torrents/')
-            print(f"Copied seeder file '{self.seeder_file}' to seeder host h1")
+            h1.cmd(f'cp {self.seeder_file} {self.MAIN_SCRIPT_PATH}/')
+            print(f"Copied seeder file '{self.seeder_file}' to seeder host h1 at {self.MAIN_SCRIPT_PATH}")
     
     def _run_seeder(self):
         """Run the seeder on h1."""
@@ -198,8 +153,8 @@ class BitTorrentMininet:
         # Create log file for seeder (accessible to Mininet host)
         seeder_log = os.path.join(self.mininet_log_dir, "h1_seeder.log")
         
-        # Change to torrents directory and run seeder in background with output redirection
-        full_cmd = f'cd /tmp/torrents && {seeder_cmd} > {seeder_log} 2>&1 &'
+        # Change to main script directory and run seeder in background with output redirection
+        full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {seeder_cmd} > {seeder_log} 2>&1 &'
         h1.cmd(full_cmd)
         
         print(f"Seeder output will be logged to: {seeder_log}")
@@ -220,8 +175,8 @@ class BitTorrentMininet:
                 # Create log file for this leecher (accessible to Mininet host)
                 leecher_log = os.path.join(self.mininet_log_dir, f"h{i}_leecher.log")
                 
-                # Change to torrents directory and run leecher with output redirection
-                full_cmd = f'cd /tmp/torrents && {leecher_cmd} > {leecher_log} 2>&1'
+                # Change to main script directory and run leecher with output redirection
+                full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {leecher_cmd} > {leecher_log} 2>&1'
                 process = host.popen(full_cmd, shell=True)
                 leecher_processes.append((f'h{i}', process, leecher_log))
                 
@@ -256,9 +211,6 @@ class BitTorrentMininet:
         
         # Copy necessary files to hosts
         self._copy_files_to_hosts()
-        
-        # Show environment information
-        print(f"Using virtual environment: {self.venv_path}")
         
         # Start seeder first
         if self.seeder_file:
