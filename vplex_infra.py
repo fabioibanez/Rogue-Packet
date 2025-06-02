@@ -12,6 +12,7 @@ import datetime
 import shutil
 import subprocess
 import sys
+import json
 
 
 class DelayedSingleSwitchTopo(Topo):
@@ -60,6 +61,7 @@ class BitTorrentMininet:
         self.seeder_file = seeder_file
         self.auto_install = auto_install
         self.net = None
+        self.mock_tracker_file = None  # Will be set when created
         self.log_dir = self._create_log_directory()  # Keep for backward compatibility
         
         self.mock_tracker = (mock_tracker_fname is not None)
@@ -174,7 +176,46 @@ class BitTorrentMininet:
         print(f"Network started successfully")
         return self.net
     
-    def _build_bittorrent_command(self, host_ip, is_seeder=False):
+    def _create_mock_tracker_file(self):
+        """Create a mock tracker file with all host IPs for the experiment."""
+        if not self.net:
+            raise RuntimeError("Network not created. Cannot generate mock tracker file.")
+        
+        # Create mock tracker file in the main script directory
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        tracker_filename = f"mock_tracker_{timestamp}.json"
+        self.mock_tracker_file = os.path.join(self.MAIN_SCRIPT_PATH, tracker_filename)
+        
+        # Collect all host IPs
+        host_ips = []
+        for i in range(1, self.num_hosts + 1):
+            host = self.net.get(f'h{i}')
+            if host:
+                host_info = {
+                    "host_id": f"h{i}",
+                    "ip": host.IP(),
+                    "port": 6881,  # Default BitTorrent port
+                    "role": "seeder" if i <= self.num_seeders else "leecher"
+                }
+                host_ips.append(host_info)
+        
+        # Create mock tracker data
+        tracker_data = {
+            "experiment_id": timestamp,
+            "total_hosts": self.num_hosts,
+            "seeders": self.num_seeders,
+            "leechers": self.num_leechers,
+            "peers": host_ips
+        }
+        
+        # Write tracker file
+        with open(self.mock_tracker_file, 'w') as f:
+            json.dump(tracker_data, f, indent=2)
+        
+        print(f"Created mock tracker file: {self.mock_tracker_file}")
+        print(f"Mock tracker contains {len(host_ips)} peer(s)")
+        
+        return self.mock_tracker_file
         """Build the command string for running the BitTorrent client."""
         # Use just the filename since the torrent file will be copied to the working directory
         torrent_filename = os.path.basename(self.torrent_file)
@@ -196,7 +237,7 @@ class BitTorrentMininet:
         return ' '.join(cmd_parts)
     
     def _copy_files_to_hosts(self):
-        """Copy torrent file to all hosts and seeder file only to seeder hosts."""
+        """Copy torrent file and mock tracker to all hosts, seeder file only to seeder hosts."""
         print("Copying files to hosts...")
         
         # Copy torrent file to ALL hosts (seeders and leechers)
@@ -206,6 +247,10 @@ class BitTorrentMininet:
                 # Ensure the main script directory exists and copy torrent file
                 host.cmd(f'mkdir -p {self.MAIN_SCRIPT_PATH}')
                 host.cmd(f'cp {self.torrent_file} {self.MAIN_SCRIPT_PATH}/')
+                
+                # Copy mock tracker file to all hosts
+                if self.mock_tracker_file and os.path.exists(self.mock_tracker_file):
+                    host.cmd(f'cp {self.mock_tracker_file} {self.MAIN_SCRIPT_PATH}/')
         
         # Copy seeder file ONLY to seeder hosts (h1 through h[num_seeders]) if specified
         if self.seeder_file:
@@ -216,6 +261,8 @@ class BitTorrentMininet:
                     print(f"Copied seeder file '{self.seeder_file}' to seeder host h{i} at {self.MAIN_SCRIPT_PATH}")
         
         print(f"Torrent file copied to all {self.num_hosts} hosts")
+        if self.mock_tracker_file:
+            print(f"Mock tracker file copied to all {self.num_hosts} hosts")
         if self.seeder_file:
             print(f"Complete file copied to {self.num_seeders} seeder host(s) only")
     
@@ -289,6 +336,9 @@ class BitTorrentMininet:
         if not self.net:
             raise RuntimeError("Network not created. Call _create_network() first.")
         
+        # Create mock tracker file with all host IPs
+        self._create_mock_tracker_file()
+        
         # Show all host IPs for reference
         print("Available hosts:")
         for i in range(1, self.num_hosts + 1):
@@ -356,6 +406,7 @@ class BitTorrentMininet:
             f.write(f"Timestamp: {datetime.datetime.now()}\n")
             f.write(f"Torrent file: {self.torrent_file}\n")
             f.write(f"Seeder file: {self.seeder_file or 'None'}\n")
+            f.write(f"Mock tracker file: {self.mock_tracker_file or 'None'}\n")
             f.write(f"Topology: {self.topology_name}\n")
             f.write(f"Number of seeders: {self.num_seeders}\n")
             f.write(f"Number of leechers: {self.num_leechers}\n")
@@ -415,6 +466,11 @@ class BitTorrentMininet:
             print("Stopping network...")
             self.net.stop()
             self.net = None
+        
+        # Clean up mock tracker file
+        if self.mock_tracker_file and os.path.exists(self.mock_tracker_file):
+            os.remove(self.mock_tracker_file)
+            print(f"Cleaned up mock tracker file: {self.mock_tracker_file}")
         
         # Clean up temporary mininet log directory
         if hasattr(self, 'mininet_log_dir') and os.path.exists(self.mininet_log_dir):
