@@ -40,7 +40,7 @@ class BitTorrentMininet:
     MAIN_SCRIPT_PATH = "/home/ubuntu/Rogue-Packet"
     
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
-                 num_hosts=3, topology='single', delay='0ms', seeder_file=None, conda_env=None):
+                 num_hosts=3, topology='single', delay='0ms', seeder_file=None):
         self.torrent_file = torrent_file
         self.verbose = verbose
         self.delete_torrent = delete_torrent
@@ -49,8 +49,8 @@ class BitTorrentMininet:
         self.topology_name = topology
         self.delay = delay
         self.seeder_file = seeder_file
-        self.conda_env = conda_env
         self.net = None
+        self.venv_path = f"{self.MAIN_SCRIPT_PATH}/venv"
         self.log_dir = self._create_log_directory()  # Keep for backward compatibility
     
     def _create_log_directory(self):
@@ -75,66 +75,44 @@ class BitTorrentMininet:
         
         return host_log_dir
     
-    def _detect_conda_environment(self):
-        """Detect the current conda environment if not specified."""
-        if self.conda_env:
-            return self.conda_env
-            
-        # Try to detect current conda environment
-        conda_env = os.environ.get('CONDA_DEFAULT_ENV')
-        if conda_env and conda_env != 'base':
-            print(f"Detected conda environment: {conda_env}")
-            return conda_env
-        return None
-    
     def _setup_host_environment(self, host, host_name):
-        """Set up the Python environment on a host."""
-        print(f"Setting up environment on {host_name}...")
+        """Set up a virtual environment on a host and install requirements."""
+        print(f"Setting up virtual environment on {host_name}...")
         
         # Ensure main script directory exists
         host.cmd(f'mkdir -p {self.MAIN_SCRIPT_PATH}')
         
-        # Try to install common dependencies that might be missing
-        common_packages = ['matplotlib', 'requests', 'bencodepy', 'bitstring', 'numpy']
-        for package in common_packages:
-            # Check if package is available, install if not
-            result = host.cmd(f'python3 -c "import {package}" 2>&1')
-            if 'ModuleNotFoundError' in result or 'ImportError' in result:
-                print(f"Installing {package} on {host_name}...")
-                install_result = host.cmd(f'pip3 install {package} --quiet --user')
+        # Create virtual environment
+        print(f"Creating venv on {host_name}...")
+        venv_result = host.cmd(f'cd {self.MAIN_SCRIPT_PATH} && python3 -m venv venv')
         
-        # Check if requirements.txt exists and install dependencies
+        # Check if venv was created successfully
+        venv_check = host.cmd(f'[ -f {self.venv_path}/bin/python ] && echo "venv_ok" || echo "venv_failed"')
+        if 'venv_failed' in venv_check:
+            print(f"✗ Failed to create venv on {host_name}")
+            return False
+        
+        print(f"✓ Virtual environment created on {host_name}")
+        
+        # Upgrade pip in venv
+        host.cmd(f'{self.venv_path}/bin/python -m pip install --upgrade pip --quiet')
+        
+        # Install requirements.txt if it exists
         requirements_path = f"{self.MAIN_SCRIPT_PATH}/requirements.txt"
-        result = host.cmd(f'[ -f {requirements_path} ] && pip3 install -r {requirements_path} --quiet --user || echo "No requirements.txt found"')
+        req_check = host.cmd(f'[ -f {requirements_path} ] && echo "req_exists" || echo "req_missing"')
         
-        # Test that matplotlib is now available
-        test_result = host.cmd(f'python3 -c "import matplotlib; print(\\"matplotlib OK\\")" 2>&1')
-        if 'matplotlib OK' in test_result:
-            print(f"✓ matplotlib successfully installed on {host_name}")
+        if 'req_exists' in req_check:
+            print(f"Installing requirements.txt on {host_name}...")
+            install_result = host.cmd(f'{self.venv_path}/bin/pip install -r {requirements_path} --quiet')
+            print(f"✓ Requirements installed on {host_name}")
         else:
-            print(f"✗ matplotlib installation failed on {host_name}: {test_result.strip()}")
+            print(f"⚠ No requirements.txt found at {requirements_path}")
         
-        print(f"Environment setup completed for {host_name}")
-    
-    def _build_environment_command(self):
-        """Build the environment activation command."""
-        conda_env = self._detect_conda_environment()
+        # Test critical imports
+        test_result = host.cmd(f'{self.venv_path}/bin/python -c "import sys; print(\\"Python:\\", sys.version)" 2>&1')
+        print(f"✓ Environment setup completed for {host_name}: {test_result.strip()}")
         
-        if conda_env:
-            # Try multiple common conda paths
-            conda_paths = [
-                "/home/ubuntu/miniconda3/etc/profile.d/conda.sh",
-                "/home/ubuntu/anaconda3/etc/profile.d/conda.sh", 
-                "/opt/conda/etc/profile.d/conda.sh",
-                "~/miniconda3/etc/profile.d/conda.sh",
-                "~/anaconda3/etc/profile.d/conda.sh"
-            ]
-            
-            # Use the first existing conda path
-            for conda_path in conda_paths:
-                return f"source {conda_path} 2>/dev/null && conda activate {conda_env} 2>/dev/null"
-        
-        return ""
+        return True
     
     def _validate_torrent_file(self):
         """Check if the torrent file exists."""
@@ -195,30 +173,32 @@ class BitTorrentMininet:
             return base_cmd
     
     def _copy_files_to_hosts(self):
-        """Copy torrent file to all hosts, seeder file to seeder host, and set up environments."""
-        print("Copying files to hosts and setting up environments...")
+        """Copy torrent file to all hosts, seeder file to seeder host, and set up virtual environments."""
+        print("Copying files to hosts and setting up virtual environments...")
         
-        # Copy torrent file to the main script directory for all hosts and set up environment
+        # Copy torrent file to the main script directory for all hosts and set up venv
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
                 host_name = f'h{i}'
                 print(f"Setting up {host_name}...")
                 
-                # Set up environment (installs requirements.txt and common packages)
-                self._setup_host_environment(host, host_name)
+                # Set up virtual environment and install requirements
+                success = self._setup_host_environment(host, host_name)
+                if not success:
+                    print(f"⚠ Environment setup failed for {host_name}, but continuing...")
                 
                 # Copy torrent file
                 host.cmd(f'cp {self.torrent_file} {self.MAIN_SCRIPT_PATH}/')
-                print(f"Copied torrent file to {host_name}")
+                print(f"✓ Copied torrent file to {host_name}")
         
         # Copy seeder file to seeder host (h1) if specified
         if self.seeder_file:
             h1 = self.net.get('h1')
             h1.cmd(f'cp {self.seeder_file} {self.MAIN_SCRIPT_PATH}/')
-            print(f"Copied seeder file '{self.seeder_file}' to seeder host h1 at {self.MAIN_SCRIPT_PATH}")
+            print(f"✓ Copied seeder file '{self.seeder_file}' to seeder host h1")
         
-        print("File copying and environment setup completed.")
+        print("✓ File copying and virtual environment setup completed.")
     
     def _run_seeder(self):
         """Run the seeder on h1."""
@@ -290,11 +270,7 @@ class BitTorrentMininet:
         self._copy_files_to_hosts()
         
         # Show environment information
-        conda_env = self._detect_conda_environment()
-        if conda_env:
-            print(f"Using conda environment: {conda_env}")
-        else:
-            print("Using system Python3 with pip-installed requirements")
+        print(f"Using virtual environment: {self.venv_path}")
         
         # Start seeder first
         if self.seeder_file:
@@ -428,8 +404,6 @@ def _parse_arguments():
                         help='Link delay (e.g., 10ms, 100ms, 1s) (default: 0ms)')
     parser.add_argument('--seeder-file', 
                         help='Path to the complete file for seeding (seeder will have this file)')
-    parser.add_argument('--conda-env', 
-                        help='Conda environment name to activate (auto-detected if not specified)')
     
     return parser.parse_args()
 
@@ -447,8 +421,7 @@ def main():
         num_hosts=args.hosts,
         topology=args.topology,
         delay=args.delay,
-        seeder_file=args.seeder_file,
-        conda_env=args.conda_env
+        seeder_file=args.seeder_file
     )
     
     bt_mininet.run()
