@@ -3,6 +3,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+import random
 from helpers import cleanup_torrent_download, plot_dirsize_overtime
 import os
 import threading
@@ -216,5 +217,10 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--seed', action='store_true',
                         help='Seed the torrent after downloading it')
     args = parser.parse_args()
-    run = Run(args)
-    run.start()
+    # run = Run(args)
+    # run.start()
+    
+    print("\033[1;32mStarting Virtual BitTorrent client...\033[0m")
+    time.sleep(random.uniform(0.5, 1.5))  # Simulate some startup delay
+    print("\033[1;32mEnding Virtual BitTorrent client...\033[0m")
+    
