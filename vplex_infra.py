@@ -116,20 +116,15 @@ class BitTorrentMininet:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         torrent_name = os.path.splitext(os.path.basename(self.torrent_file))[0]
         
-        # Create log directory on host filesystem
-        host_log_dir = f"logs/{torrent_name}_{timestamp}"
+        # Create log directory on host filesystem (accessible to both host and mininet)
+        host_log_dir = os.path.abspath(f"logs/{torrent_name}_{timestamp}")
         os.makedirs(host_log_dir, exist_ok=True)
         
-        # Also create log directory accessible to Mininet hosts
-        mininet_log_dir = f"/tmp/mininet_logs_{timestamp}"
-        os.makedirs(mininet_log_dir, exist_ok=True)
-        
         print(f"Created log directory: {host_log_dir}")
-        print(f"Mininet log directory: {mininet_log_dir}")
+        print(f"📡 Logs will stream in real-time to this directory")
         
-        # Store both paths
+        # Store the path
         self.host_log_dir = host_log_dir
-        self.mininet_log_dir = mininet_log_dir
         
         return host_log_dir
     
@@ -301,10 +296,11 @@ class BitTorrentMininet:
                 if self.verbose:
                     print(f"    Command: {seeder_cmd}")
                 
-                # Create log file for seeder
-                seeder_log = os.path.join(self.mininet_log_dir, f"h{i}_seeder.log")
+                # Create log file for seeder (streaming directly to final location)
+                seeder_log = os.path.join(self.host_log_dir, f"h{i}_seeder.log")
+                print(f"    📡 Streaming to: {seeder_log}")
                 
-                # Run seeder in background with output redirection
+                # Run seeder in background with output redirection to final log location
                 full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {seeder_cmd} > {seeder_log} 2>&1 &'
                 host.cmd(full_cmd)
                 
@@ -331,10 +327,11 @@ class BitTorrentMininet:
                 if self.verbose:
                     print(f"    Command: {leecher_cmd}")
                 
-                # Create log file for leecher
-                leecher_log = os.path.join(self.mininet_log_dir, f"h{i}_leecher.log")
+                # Create log file for leecher (streaming directly to final location)
+                leecher_log = os.path.join(self.host_log_dir, f"h{i}_leecher.log")
+                print(f"    📡 Streaming to: {leecher_log}")
                 
-                # Run leecher with output redirection
+                # Run leecher with output redirection to final log location
                 full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {leecher_cmd} > {leecher_log} 2>&1'
                 process = host.popen(full_cmd, shell=True)
                 leecher_processes.append((f'h{i}', process, leecher_log))
@@ -391,7 +388,9 @@ class BitTorrentMininet:
         # Wait for completion or interruption
         try:
             print(f"\n🚀 BitTorrent simulation running...")
-            print(f"📁 Logs: {self.host_log_dir}")
+            print(f"📁 Real-time logs: {self.host_log_dir}")
+            print(f"💡 You can tail logs in another terminal:")
+            print(f"   tail -f {self.host_log_dir}/*.log")
             print("Press Ctrl+C to stop\n")
             
             while True:
@@ -409,8 +408,7 @@ class BitTorrentMininet:
                     print("🌱 Only seeders running (press Ctrl+C to stop)")
                     time.sleep(8)
                     
-            # Copy logs and create summary
-            self._copy_logs_to_host()
+            # Create summary (logs are already in final location)
             self._create_summary_log(all_processes)
             
             print(f"\n🎉 Simulation completed! Logs: {self.host_log_dir}")
@@ -423,7 +421,7 @@ class BitTorrentMininet:
                     proc.terminate()
                     print(f"  Stopped {name}")
             
-            self._copy_logs_to_host()
+            # Create summary (logs are already in final location)
             self._create_summary_log(all_processes, interrupted=True)
             print(f"📁 Logs saved: {self.host_log_dir}")
     
