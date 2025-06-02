@@ -1,8 +1,8 @@
 #!/usr/bin/python
-from mininet.topo import Topo, SingleSwitchTopo
+from mininet.topo import Topo
 from mininet.net import Mininet
 from mininet.link import TCLink
-from mininet.log import lg, info
+from mininet.log import lg
 from mininet.node import OVSController
 import argparse
 import time
@@ -11,7 +11,6 @@ import datetime
 import shutil
 import subprocess
 import sys
-import json
 
 
 class Colors:
@@ -87,8 +86,7 @@ class BitTorrentMininet:
     REQUIREMENTS_PATH = "/home/ubuntu/Rogue-Packet/requirements.txt"
     
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
-                 num_seeders=1, num_leechers=2, topology='single', delay='0ms', seeder_file=None, 
-                 auto_install=True, interpreter="python3"):
+                 num_seeders=1, num_leechers=2, topology='single', delay='0ms', seeder_file=None):
         self.torrent_file = torrent_file
         self.verbose = verbose
         self.delete_torrent = delete_torrent
@@ -99,54 +97,55 @@ class BitTorrentMininet:
         self.topology_name = topology
         self.delay = delay
         self.seeder_file = seeder_file
-        self.auto_install = auto_install
         self.net = None
         self.mock_tracker_path = None  # Will store the path to mock tracker file
         self.log_dir = self._create_log_directory()  # Keep for backward compatibility
-        self.interpreter = interpreter
 
     def _install_requirements(self):
-        """Install packages from requirements.txt if it exists."""
-        if not self.auto_install:
-            print(Colors.info("Auto-install disabled, skipping package installation"))
-            return
-            
-        if not os.path.exists(self.REQUIREMENTS_PATH):
-            print(Colors.warning(f"Requirements file not found at {self.REQUIREMENTS_PATH}"))
-            return
+        """Create virtual environment and install requirements."""
+        print(Colors.info("🔧 Setting up virtual environment..."))
         
-        print(Colors.info(f"Installing packages from {self.REQUIREMENTS_PATH}..."))
-        
+        # Get the directory containing this script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        venv_path = os.path.join(script_dir, "venv")
+        requirements_path = os.path.join(script_dir, "requirements.txt")
+
+        # Check if requirements.txt exists
+        if not os.path.exists(requirements_path):
+            print(Colors.error(f"❌ requirements.txt not found in {script_dir}"))
+            return
+
         try:
-            result = subprocess.run([
-                'sudo', 'pip3', 'install', '-r', self.REQUIREMENTS_PATH
-            ], capture_output=True, text=True, timeout=300)
-            
-            if result.returncode == 0:
-                print(Colors.success("Packages installed successfully with pip3"))
-                if self.verbose:
-                    print(f"Installation output: {result.stdout}")
+            # Create virtual environment if it doesn't exist
+            if not os.path.exists(venv_path):
+                print(Colors.info("Creating virtual environment..."))
+                subprocess.run([sys.executable, "-m", "venv", venv_path], check=True)
+
+            # Get the virtual environment's Python interpreter path
+            if sys.platform == "win32":
+                venv_python = os.path.join(venv_path, "Scripts", "python.exe")
             else:
-                print(Colors.warning("pip3 installation had issues, trying pip..."))
-                if self.verbose:
-                    print(f"pip3 stderr: {result.stderr}")
-                
-                result = subprocess.run([
-                    'sudo', 'pip', 'install', '-r', self.REQUIREMENTS_PATH
-                ], capture_output=True, text=True, timeout=300)
-                
-                if result.returncode == 0:
-                    print(Colors.success("Packages installed successfully with pip"))
-                else:
-                    print(Colors.warning("Package installation failed - continuing anyway"))
-                    if self.verbose:
-                        print(f"Error: {result.stderr}")
-                    
-        except subprocess.TimeoutExpired:
-            print(Colors.warning("Package installation timed out - continuing anyway"))
+                venv_python = os.path.join(venv_path, "bin", "python")
+
+            if not os.path.exists(venv_python):
+                raise FileNotFoundError(f"Virtual environment Python not found at {venv_python}")
+
+            # Install requirements
+            print(Colors.info("Installing requirements..."))
+            subprocess.run([venv_python, "-m", "pip", "install", "-r", requirements_path], check=True)
+
+            # Set the interpreter to use the virtual environment's Python
+            self.interpreter = venv_python
+            print(Colors.success("✓ Virtual environment setup complete"))
+            print(Colors.info(f"Using interpreter: {self.interpreter}"))
+
+        except subprocess.CalledProcessError as e:
+            print(Colors.error(f"Failed to set up virtual environment: {e}"))
+            raise
         except Exception as e:
-            print(Colors.warning(f"Error during package installation: {e} - continuing anyway"))
-    
+            print(Colors.error(f"Error during virtual environment setup: {e}"))
+            raise
+
     def _create_log_directory(self):
         """Create a unique log directory for this run."""
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -592,9 +591,7 @@ def main():
         num_leechers=args.leechers,
         topology=args.topology,
         delay=args.delay,
-        seeder_file=args.seeder_file,
-        auto_install=not args.no_auto_install,
-        interpreter=args.interpreter or "python3"
+        seeder_file=args.seeder_file
     )
     
     bt_mininet.run()
