@@ -16,6 +16,7 @@ from piece import BlockState
 from torrent import Torrent
 from tracker import Tracker
 from message import Request
+from tracker_mock import MockTracker
 
 
 SLEEP_FOR_NO_UNCHOKED: int = 1
@@ -38,8 +39,11 @@ class Run(object):
         self.seed_after_download: bool = args.seed
         if args.deletetorrent: cleanup_torrent_download(torrent_file=args.torrent_file)
 
+        if args.mock_tracker and not args.local_ip:
+            raise Exception("If you pass --mock_tracker, you must pass --local-ip with the local IP of the emulated instance")
+
         self.torrent = Torrent().load_from_path(path=args.torrent_file)
-        self.tracker = Tracker(self.torrent)
+        self.tracker = Tracker(self.torrent) if not args.mock_tracker else MockTracker(self.torrent, args.mock_tracker, args.local_ip)
         self.pieces_manager = PiecesManager(self.torrent)
         self.peers_manager = PeersManager(self.torrent, self.pieces_manager)
         self.peers_manager.start()  # This starts the peer manager thread
@@ -216,6 +220,8 @@ if __name__ == '__main__':
                         help='Delete any existing, previous torrent folder for your specified torrent target. Speeds up testing.')
     parser.add_argument('-s', '--seed', action='store_true',
                         help='Seed the torrent after downloading it')
+    parser.add_argument('--mock-tracker', type=str, help="Mock tracker to use during emulation. Must also pass --local-ip")
+    parser.add_argument('--local-ip', type=str, help="Local IP to use during emulation")
     args = parser.parse_args()
     # run = Run(args)
     # run.start()
