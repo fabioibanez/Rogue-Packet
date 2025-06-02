@@ -14,6 +14,48 @@ import sys
 import json
 
 
+class Colors:
+    """ANSI color codes for terminal output."""
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    MAGENTA = '\033[95m'
+    CYAN = '\033[96m'
+    WHITE = '\033[97m'
+    BOLD = '\033[1m'
+    END = '\033[0m'
+
+    @classmethod
+    def colorize(cls, text, color):
+        """Add color to text."""
+        return f"{color}{text}{cls.END}"
+
+    @classmethod
+    def success(cls, text):
+        return cls.colorize(f"✓ {text}", cls.GREEN)
+    
+    @classmethod
+    def warning(cls, text):
+        return cls.colorize(f"⚠ {text}", cls.YELLOW)
+    
+    @classmethod
+    def error(cls, text):
+        return cls.colorize(f"❌ {text}", cls.RED)
+    
+    @classmethod
+    def info(cls, text):
+        return cls.colorize(f"ℹ {text}", cls.BLUE)
+    
+    @classmethod
+    def network(cls, text):
+        return cls.colorize(text, cls.CYAN)
+    
+    @classmethod
+    def file_op(cls, text):
+        return cls.colorize(text, cls.MAGENTA)
+
+
 class DelayedSingleSwitchTopo(Topo):
     """Single switch topology with configurable delay on all links."""
     
@@ -24,7 +66,6 @@ class DelayedSingleSwitchTopo(Topo):
     
     def build(self):
         switch = self.addSwitch('s1')
-        
         for i in range(self.k):
             host = self.addHost(f'h{i+1}')
             self.addLink(host, switch, cls=TCLink, delay=self.delay)
@@ -66,66 +107,57 @@ class BitTorrentMininet:
     def _install_requirements(self):
         """Install packages from requirements.txt if it exists."""
         if not self.auto_install:
-            print("Auto-install disabled, skipping package installation")
+            print(Colors.info("Auto-install disabled, skipping package installation"))
             return
             
         if not os.path.exists(self.REQUIREMENTS_PATH):
-            print(f"Requirements file not found at {self.REQUIREMENTS_PATH}, skipping package installation")
+            print(Colors.warning(f"Requirements file not found at {self.REQUIREMENTS_PATH}"))
             return
         
-        print(f"Installing packages from {self.REQUIREMENTS_PATH}...")
+        print(Colors.info(f"Installing packages from {self.REQUIREMENTS_PATH}..."))
         
         try:
-            # Try pip3 first (most common for Mininet)
             result = subprocess.run([
                 'sudo', 'pip3', 'install', '-r', self.REQUIREMENTS_PATH
             ], capture_output=True, text=True, timeout=300)
             
             if result.returncode == 0:
-                print("✓ Packages installed successfully with pip3")
+                print(Colors.success("Packages installed successfully with pip3"))
                 if self.verbose:
-                    print("Installation output:", result.stdout)
+                    print(f"Installation output: {result.stdout}")
             else:
-                print("⚠ pip3 installation had issues, trying pip...")
+                print(Colors.warning("pip3 installation had issues, trying pip..."))
                 if self.verbose:
-                    print("pip3 stderr:", result.stderr)
+                    print(f"pip3 stderr: {result.stderr}")
                 
-                # Fallback to regular pip
                 result = subprocess.run([
                     'sudo', 'pip', 'install', '-r', self.REQUIREMENTS_PATH
                 ], capture_output=True, text=True, timeout=300)
                 
                 if result.returncode == 0:
-                    print("✓ Packages installed successfully with pip")
-                    if self.verbose:
-                        print("Installation output:", result.stdout)
+                    print(Colors.success("Packages installed successfully with pip"))
                 else:
-                    print("⚠ Package installation failed")
-                    print("Error:", result.stderr)
-                    print("Continuing anyway - some functionality may not work")
+                    print(Colors.warning("Package installation failed - continuing anyway"))
+                    if self.verbose:
+                        print(f"Error: {result.stderr}")
                     
         except subprocess.TimeoutExpired:
-            print("⚠ Package installation timed out after 5 minutes")
-            print("Continuing anyway - some functionality may not work")
+            print(Colors.warning("Package installation timed out - continuing anyway"))
         except Exception as e:
-            print(f"⚠ Error during package installation: {e}")
-            print("Continuing anyway - some functionality may not work")
+            print(Colors.warning(f"Error during package installation: {e} - continuing anyway"))
     
     def _create_log_directory(self):
         """Create a unique log directory for this run."""
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         torrent_name = os.path.splitext(os.path.basename(self.torrent_file))[0]
         
-        # Create log directory on host filesystem (accessible to both host and mininet)
         host_log_dir = os.path.abspath(f"logs/{torrent_name}_{timestamp}")
         os.makedirs(host_log_dir, exist_ok=True)
         
-        print(f"Created log directory: {host_log_dir}")
-        print(f"📡 Logs will stream in real-time to this directory")
+        print(Colors.file_op(f"📁 Created log directory: {host_log_dir}"))
+        print(Colors.info("📡 Logs will stream in real-time"))
         
-        # Store the path
         self.host_log_dir = host_log_dir
-        
         return host_log_dir
     
     def _validate_torrent_file(self):
@@ -152,13 +184,13 @@ class BitTorrentMininet:
     def _create_network(self):
         """Create and start the Mininet network."""
         lg.setLogLevel('info')
-        print(f"Setting up {self.topology_name} topology with {self.num_hosts} hosts (delay: {self.delay})")
+        print(Colors.network(f"🌐 Setting up {self.topology_name} topology: {self.num_hosts} hosts, {self.delay} delay"))
         
         topo = self._create_topology()
         self.net = Mininet(topo=topo, controller=OVSController, link=TCLink)
         self.net.start()
         
-        print(f"Network started successfully")
+        print(Colors.success("Network started"))
         return self.net
     
     def _create_mock_tracker(self):
@@ -166,51 +198,37 @@ class BitTorrentMininet:
         if not self.net:
             raise RuntimeError("Network must be created before generating mock tracker")
         
-        # Create timestamp for unique filename
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         mock_tracker_filename = f"mock_tracker_{timestamp}.json"
         self.mock_tracker_path = os.path.join(self.MAIN_SCRIPT_PATH, mock_tracker_filename)
         
-        # Collect all peer information
-        peers = []
+        # Collect peer information in the format expected by MockTracker
+        # Based on the error, MockTracker expects an array of peer objects
+        peers_list = []
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                peer_info = {
+                # Create peer object in the format MockTracker expects
+                peer_data = {
                     "peer_id": f"peer_{i}",
                     "ip": host.IP(),
                     "port": 6881,
                     "host_name": f"h{i}",
                     "is_seeder": i <= self.num_seeders
                 }
-                peers.append(peer_info)
+                peers_list.append(peer_data)
         
-        # Create mock tracker data structure
-        mock_tracker_data = {
-            "tracker_info": {
-                "experiment_id": timestamp,
-                "created_at": datetime.datetime.now().isoformat(),
-                "total_peers": len(peers),
-                "seeders": self.num_seeders,
-                "leechers": self.num_leechers
-            },
-            "peers": peers,
-            "announce_list": [f"{peer['ip']}:{peer['port']}" for peer in peers]
-        }
-        
-        # Write mock tracker file
         try:
+            # Write just the peers array - MockTracker seems to expect this format
             with open(self.mock_tracker_path, 'w') as f:
-                json.dump(mock_tracker_data, f, indent=4)
+                json.dump(peers_list, f, indent=2)
             
-            print(f"✓ Created mock tracker: {self.mock_tracker_path}")
-            print(f"  - Total peers: {len(peers)}")
-            print(f"  - Seeders: {self.num_seeders}, Leechers: {self.num_leechers}")
-            
-            return mock_tracker_filename  # Return just the filename for copying
+            print(Colors.success(f"Created mock tracker: {mock_tracker_filename}"))
+            print(Colors.info(f"Total peers: {len(peers_list)} ({self.num_seeders} seeders, {self.num_leechers} leechers)"))
+            return mock_tracker_filename
             
         except Exception as e:
-            print(f"⚠ Failed to create mock tracker file: {e}")
+            print(Colors.error(f"Failed to create mock tracker: {e}"))
             return None
     
     def _build_bittorrent_command(self, host_ip, is_seeder=False):
@@ -239,26 +257,18 @@ class BitTorrentMininet:
     
     def _copy_files_to_hosts(self):
         """Copy all necessary files to hosts."""
-        print("Copying files to hosts...")
+        print(Colors.file_op("📋 Copying files to hosts..."))
         
-        files_copied = {
-            'torrent': 0,
-            'mock_tracker': 0,
-            'seeder_file': 0
-        }
+        files_copied = {'torrent': 0, 'mock_tracker': 0, 'seeder_file': 0}
         
         # Copy torrent file and mock tracker to ALL hosts
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                # Ensure directory exists
                 host.cmd(f'mkdir -p {self.MAIN_SCRIPT_PATH}')
-                
-                # Copy torrent file
                 host.cmd(f'cp {self.torrent_file} {self.MAIN_SCRIPT_PATH}/')
                 files_copied['torrent'] += 1
                 
-                # Copy mock tracker file if it exists
                 if self.mock_tracker_path and os.path.exists(self.mock_tracker_path):
                     host.cmd(f'cp {self.mock_tracker_path} {self.MAIN_SCRIPT_PATH}/')
                     files_copied['mock_tracker'] += 1
@@ -270,68 +280,60 @@ class BitTorrentMininet:
                 if host:
                     host.cmd(f'cp {self.seeder_file} {self.MAIN_SCRIPT_PATH}/')
                     files_copied['seeder_file'] += 1
-                    print(f"  ✓ Seeder file copied to h{i}")
         
         # Print summary
-        print(f"  ✓ Torrent file copied to {files_copied['torrent']} hosts")
+        print(Colors.success(f"Torrent file → {files_copied['torrent']} hosts"))
         if files_copied['mock_tracker'] > 0:
-            print(f"  ✓ Mock tracker copied to {files_copied['mock_tracker']} hosts")
+            print(Colors.success(f"Mock tracker → {files_copied['mock_tracker']} hosts"))
         if files_copied['seeder_file'] > 0:
-            print(f"  ✓ Complete file copied to {files_copied['seeder_file']} seeder(s) only")
+            print(Colors.success(f"Complete file → {files_copied['seeder_file']} seeder(s) only"))
     
     def _run_seeders(self):
         """Run seeders on the first num_seeders hosts."""
         if self.num_seeders == 0:
-            print("No seeders to start")
+            print(Colors.info("No seeders to start"))
             return []
             
-        print(f"Starting {self.num_seeders} seeder(s)...")
+        print(Colors.colorize(f"🌱 Starting {self.num_seeders} seeder(s)...", Colors.GREEN))
         
         seeder_processes = []
         for i in range(1, self.num_seeders + 1):
             host = self.net.get(f'h{i}')
             if host:
                 seeder_cmd = self._build_bittorrent_command(host.IP(), is_seeder=True)
-                print(f"  Starting seeder h{i} ({host.IP()})")
+                seeder_log = os.path.join(self.host_log_dir, f"h{i}_seeder.log")
+                
+                print(f"  {Colors.network(f'h{i}')} ({host.IP()}) → {Colors.file_op(f'h{i}_seeder.log')}")
                 if self.verbose:
                     print(f"    Command: {seeder_cmd}")
                 
-                # Create log file for seeder (streaming directly to final location)
-                seeder_log = os.path.join(self.host_log_dir, f"h{i}_seeder.log")
-                print(f"    📡 Streaming to: {seeder_log}")
-                
-                # Run seeder in background with output redirection to final log location
                 full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {seeder_cmd} > {seeder_log} 2>&1 &'
                 host.cmd(full_cmd)
-                
                 seeder_processes.append((f'h{i}', None, seeder_log))
         
-        print(f"Waiting 10 seconds for seeder(s) to initialize...")
+        print(Colors.info("Waiting 10 seconds for seeder(s) to initialize..."))
         time.sleep(10)
         return seeder_processes
     
     def _run_leechers(self):
         """Run leechers on the remaining hosts after seeders."""
         if self.num_leechers == 0:
-            print("No leechers to start")
+            print(Colors.info("No leechers to start"))
             return []
             
-        print(f"Starting {self.num_leechers} leecher(s)...")
+        print(Colors.colorize(f"📥 Starting {self.num_leechers} leecher(s)...", Colors.BLUE))
         
         leecher_processes = []
         for i in range(self.num_seeders + 1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
                 leecher_cmd = self._build_bittorrent_command(host.IP(), is_seeder=False)
-                print(f"  Starting leecher h{i} ({host.IP()})")
+                leecher_log = os.path.join(self.host_log_dir, f"h{i}_leecher.log")
+                
+                print(f"  {Colors.network(f'h{i}')} ({host.IP()}) → {Colors.file_op(f'h{i}_leecher.log')}")
                 if self.verbose:
                     print(f"    Command: {leecher_cmd}")
                 
-                # Create log file for leecher (streaming directly to final location)
-                leecher_log = os.path.join(self.host_log_dir, f"h{i}_leecher.log")
-                print(f"    📡 Streaming to: {leecher_log}")
-                
-                # Run leecher with output redirection to final log location
                 full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {leecher_cmd} > {leecher_log} 2>&1'
                 process = host.popen(full_cmd, shell=True)
                 leecher_processes.append((f'h{i}', process, leecher_log))
@@ -358,72 +360,63 @@ class BitTorrentMininet:
         # Create mock tracker file first
         mock_tracker_filename = self._create_mock_tracker()
         if not mock_tracker_filename:
-            print("⚠ Warning: Mock tracker creation failed, clients may not work properly")
+            print(Colors.warning("Mock tracker creation failed - clients may not work properly"))
         
-        # Show all host IPs for reference
-        print("\nHost assignments:")
+        # Show host assignments
+        print(Colors.colorize("\n🏠 Host assignments:", Colors.BOLD))
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
                 role = "seeder" if i <= self.num_seeders else "leecher"
-                print(f"  h{i} ({role}): {host.IP()}")
+                role_color = Colors.GREEN if role == "seeder" else Colors.BLUE
+                print(f"  {Colors.network(f'h{i}')} ({role_color}{role}{Colors.END}): {host.IP()}")
         print()
         
-        # Copy all files to hosts
         self._copy_files_to_hosts()
         
-        # Start seeders first (if any)
+        # Start processes
         seeder_processes = []
         if self.num_seeders > 0 and self.seeder_file:
             seeder_processes = self._run_seeders()
         elif self.num_seeders > 0:
-            print("⚠ Warning: Seeders specified but no seeder file provided")
+            print(Colors.warning("Seeders specified but no seeder file provided"))
         
-        # Start leechers
         leecher_processes = self._run_leechers()
-        
-        # Combine all processes for monitoring
         all_processes = seeder_processes + leecher_processes
         
-        # Wait for completion or interruption
+        # Monitor simulation
         try:
-            print(f"\n🚀 BitTorrent simulation running...")
-            print(f"📁 Real-time logs: {self.host_log_dir}")
-            print(f"💡 You can tail logs in another terminal:")
-            print(f"   tail -f {self.host_log_dir}/*.log")
-            print("Press Ctrl+C to stop\n")
+            print(Colors.colorize(f"\n🚀 BitTorrent simulation running...", Colors.BOLD))
+            print(Colors.file_op(f"📁 Real-time logs: {self.host_log_dir}"))
+            print(Colors.info(f"💡 Monitor logs: tail -f {self.host_log_dir}/*.log"))
+            print(Colors.info("Press Ctrl+C to stop\n"))
             
             while True:
                 time.sleep(2)
-                
-                # Count active leechers
                 active_leechers = [name for name, proc, log_file in leecher_processes 
                                  if proc and proc.poll() is None]
                 
                 if self.num_leechers > 0 and not active_leechers:
-                    print("✅ All leechers completed!")
+                    print(Colors.success("All leechers completed!"))
                     break
                 elif self.num_leechers == 0:
-                    # Only seeders running
-                    print("🌱 Only seeders running (press Ctrl+C to stop)")
+                    print(Colors.info("Only seeders running (press Ctrl+C to stop)"))
                     time.sleep(8)
                     
-            # Create summary (logs are already in final location)
             self._create_summary_log(all_processes)
-            
-            print(f"\n🎉 Simulation completed! Logs: {self.host_log_dir}")
+            print(Colors.colorize(f"\n🎉 Simulation completed!", Colors.BOLD + Colors.GREEN))
+            print(Colors.file_op(f"📁 Logs: {self.host_log_dir}"))
             self._print_log_summary()
             
         except KeyboardInterrupt:
-            print("\n🛑 Stopping simulation...")
+            print(Colors.colorize("\n🛑 Stopping simulation...", Colors.YELLOW))
             for name, proc, log_file in leecher_processes:
                 if proc and proc.poll() is None:
                     proc.terminate()
-                    print(f"  Stopped {name}")
+                    print(f"  {Colors.warning(f'Stopped {name}')}")
             
-            # Create summary (logs are already in final location)
             self._create_summary_log(all_processes, interrupted=True)
-            print(f"📁 Logs saved: {self.host_log_dir}")
+            print(Colors.file_op(f"📁 Logs saved: {self.host_log_dir}"))
     
     def _create_summary_log(self, all_processes, interrupted=False):
         """Create a summary log with run information."""
@@ -584,23 +577,23 @@ def main():
     
     # Validate arguments
     if args.seeders < 0 or args.leechers < 0:
-        print("❌ Error: Number of seeders and leechers must be non-negative")
+        print(Colors.error("Number of seeders and leechers must be non-negative"))
         sys.exit(1)
     
     if args.seeders == 0 and args.leechers == 0:
-        print("❌ Error: Must have at least one seeder or leecher")
+        print(Colors.error("Must have at least one seeder or leecher"))
         sys.exit(1)
     
     if args.seeders > 0 and not args.seeder_file:
-        print("⚠ Warning: Seeders specified but no seeder file provided")
-        print("   Seeders may not function properly without complete file")
+        print(Colors.warning("Seeders specified but no seeder file provided"))
+        print(Colors.info("Seeders may not function properly without complete file"))
     
-    print(f"🚀 Starting BitTorrent Mininet Simulation")
-    print(f"   Seeders: {args.seeders}, Leechers: {args.leechers}")
-    print(f"   Network delay: {args.delay}")
+    # Welcome message
+    print(Colors.colorize(f"🚀 BitTorrent Mininet Simulation", Colors.BOLD + Colors.CYAN))
+    print(Colors.info(f"Seeders: {args.seeders}, Leechers: {args.leechers}, Delay: {args.delay}"))
     print()
     
-    # Create and run BitTorrent Mininet instance
+    # Create and run simulation
     bt_mininet = BitTorrentMininet(
         torrent_file=args.torrent_file,
         verbose=args.verbose,
