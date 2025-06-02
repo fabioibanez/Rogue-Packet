@@ -25,9 +25,6 @@ class DelayedSingleSwitchTopo(Topo):
             self.addLink(host, switch, cls=TCLink, delay=self.delay)
 
 
-
-
-
 class BitTorrentMininet:
     """
     A Mininet wrapper for running BitTorrent clients in a simulated network environment.
@@ -64,10 +61,6 @@ class BitTorrentMininet:
         if self.topology_name not in self.TOPOLOGY_MAP:
             available = ', '.join(self.TOPOLOGY_MAP.keys())
             raise ValueError(f"Invalid topology '{self.topology_name}'. Available: {available}")
-        """Validate the topology choice."""
-        if self.topology_name not in self.TOPOLOGY_MAP:
-            available = ', '.join(self.TOPOLOGY_MAP.keys())
-            raise ValueError(f"Invalid topology '{self.topology_name}'. Available: {available}")
     
     def _create_topology(self):
         """Create the specified topology with delay configuration."""
@@ -86,15 +79,18 @@ class BitTorrentMininet:
         print(f"Network started successfully")
         return self.net
     
-    def _build_bittorrent_command(self):
+    def _build_bittorrent_command(self, host_ip, is_seeder=False):
         """Build the command string for running the BitTorrent client."""
         cmd_parts = ['python', 'main.py', self.torrent_file]
+        
+        # Add local IP argument
+        cmd_parts.extend(['--local-ip', host_ip])
         
         if self.verbose:
             cmd_parts.append('-v')
         if self.delete_torrent:
             cmd_parts.append('-d')
-        if self.seed:
+        if self.seed or is_seeder:
             cmd_parts.append('-s')
         
         return ' '.join(cmd_parts)
@@ -148,26 +144,53 @@ class BitTorrentMininet:
                 leecher_processes.append((f'h{i}', process))
         
         return leecher_processes
-        """Run the BitTorrent client on the primary host."""
+    
+    def _run_bittorrent_clients(self):
+        """Run BitTorrent seeder and leechers."""
         if not self.net:
-            raise RuntimeError("Network not created. Call create_network() first.")
-        
-        # Get primary host
-        h1 = self.net.get('h1')
-        print(f"Primary host h1: {h1.IP()}")
+            raise RuntimeError("Network not created. Call _create_network() first.")
         
         # Show all host IPs for reference
         print("Available hosts:")
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                print(f"  h{i}: {host.IP()}")
+                role = "seeder" if i == 1 else "leecher"
+                print(f"  h{i} ({role}): {host.IP()}")
         
-        # Build and execute command
-        bittorrent_cmd = self._build_bittorrent_command()
-        print(f"Running BitTorrent client: {bittorrent_cmd}")
+        # Copy necessary files to hosts
+        self._copy_files_to_hosts()
         
-        h1.cmd(bittorrent_cmd)
+        # Start seeder first
+        if self.seeder_file:
+            self._run_seeder()
+        
+        # Start leechers after delay
+        leecher_processes = self._run_leechers()
+        
+        # Wait for leechers to complete (or user interruption)
+        try:
+            print("BitTorrent clients running. Press Ctrl+C to stop.")
+            while True:
+                time.sleep(1)
+                # Check if any leechers are still running
+                active_leechers = [name for name, proc in leecher_processes if proc.poll() is None]
+                if not active_leechers:
+                    print("All leechers completed.")
+                    break
+        except KeyboardInterrupt:
+            print("\nStopping all processes...")
+            for name, proc in leecher_processes:
+                if proc.poll() is None:
+                    proc.terminate()
+                    print(f"Stopped {name}")
+    
+    def _cleanup_processes(self, leecher_processes):
+        """Clean up any remaining processes."""
+        for name, proc in leecher_processes:
+            if proc.poll() is None:
+                proc.terminate()
+                print(f"Cleaned up {name}")
     
     def _cleanup(self):
         """Stop the network and cleanup resources."""
