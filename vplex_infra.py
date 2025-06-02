@@ -60,7 +60,7 @@ class BitTorrentMininet:
         self.seeder_file = seeder_file
         self.auto_install = auto_install
         self.net = None
-        self.mock_tracker_file = None  # Will be set when created
+        self.mock_tracker_path = None  # Will store the path to mock tracker file
         self.log_dir = self._create_log_directory()  # Keep for backward compatibility
     
     def _install_requirements(self):
@@ -166,54 +166,73 @@ class BitTorrentMininet:
         print(f"Network started successfully")
         return self.net
     
-    def _create_mock_tracker_file(self):
-        """Create a mock tracker file with all host IPs for the experiment."""
+    def _create_mock_tracker(self):
+        """Create a mock tracker file containing all peer information."""
         if not self.net:
-            raise RuntimeError("Network not created. Cannot generate mock tracker file.")
+            raise RuntimeError("Network must be created before generating mock tracker")
         
-        # Create mock tracker file in the main script directory
+        # Create timestamp for unique filename
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        tracker_filename = f"mock_tracker_{timestamp}.json"
-        self.mock_tracker_file = os.path.join(self.MAIN_SCRIPT_PATH, tracker_filename)
+        mock_tracker_filename = f"mock_tracker_{timestamp}.json"
+        self.mock_tracker_path = os.path.join(self.MAIN_SCRIPT_PATH, mock_tracker_filename)
         
-        # Collect all host IPs
-        host_ips = []
+        # Collect all peer information
+        peers = []
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                host_info = {
-                    "host_id": f"h{i}",
+                peer_info = {
+                    "peer_id": f"peer_{i}",
                     "ip": host.IP(),
-                    "port": 6881,  # Default BitTorrent port
-                    "role": "seeder" if i <= self.num_seeders else "leecher"
+                    "port": 6881,
+                    "host_name": f"h{i}",
+                    "is_seeder": i <= self.num_seeders
                 }
-                host_ips.append(host_info)
+                peers.append(peer_info)
         
-        # Create mock tracker data
-        tracker_data = {
-            "experiment_id": timestamp,
-            "total_hosts": self.num_hosts,
-            "seeders": self.num_seeders,
-            "leechers": self.num_leechers,
-            "peers": host_ips
+        # Create mock tracker data structure
+        mock_tracker_data = {
+            "tracker_info": {
+                "experiment_id": timestamp,
+                "created_at": datetime.datetime.now().isoformat(),
+                "total_peers": len(peers),
+                "seeders": self.num_seeders,
+                "leechers": self.num_leechers
+            },
+            "peers": peers,
+            "announce_list": [f"{peer['ip']}:{peer['port']}" for peer in peers]
         }
         
-        # Write tracker file
-        with open(self.mock_tracker_file, 'w') as f:
-            json.dump(tracker_data, f, indent=2)
-        
-        print(f"Created mock tracker file: {self.mock_tracker_file}")
-        print(f"Mock tracker contains {len(host_ips)} peer(s)")
-        
-        return self.mock_tracker_file
+        # Write mock tracker file
+        try:
+            with open(self.mock_tracker_path, 'w') as f:
+                json.dump(mock_tracker_data, f, indent=4)
+            
+            print(f"✓ Created mock tracker: {self.mock_tracker_path}")
+            print(f"  - Total peers: {len(peers)}")
+            print(f"  - Seeders: {self.num_seeders}, Leechers: {self.num_leechers}")
+            
+            return mock_tracker_filename  # Return just the filename for copying
+            
+        except Exception as e:
+            print(f"⚠ Failed to create mock tracker file: {e}")
+            return None
+    
+    def _build_bittorrent_command(self, host_ip, is_seeder=False):
         """Build the command string for running the BitTorrent client."""
         # Use just the filename since the torrent file will be copied to the working directory
         torrent_filename = os.path.basename(self.torrent_file)
         cmd_parts = ['python3', '-m', 'main', torrent_filename]
         
-        # Add local IP argument
+        # Add required arguments
         cmd_parts.extend(['--local-ip', host_ip])
         
+        # Add mock tracker if it exists
+        if self.mock_tracker_path:
+            mock_tracker_filename = os.path.basename(self.mock_tracker_path)
+            cmd_parts.extend(['--mock-tracker', mock_tracker_filename])
+        
+        # Add optional flags
         if self.verbose:
             cmd_parts.append('-v')
         if self.delete_torrent:
@@ -224,37 +243,53 @@ class BitTorrentMininet:
         return ' '.join(cmd_parts)
     
     def _copy_files_to_hosts(self):
-        """Copy torrent file and mock tracker to all hosts, seeder file only to seeder hosts."""
+        """Copy all necessary files to hosts."""
         print("Copying files to hosts...")
         
-        # Copy torrent file to ALL hosts (seeders and leechers)
+        files_copied = {
+            'torrent': 0,
+            'mock_tracker': 0,
+            'seeder_file': 0
+        }
+        
+        # Copy torrent file and mock tracker to ALL hosts
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                # Ensure the main script directory exists and copy torrent file
+                # Ensure directory exists
                 host.cmd(f'mkdir -p {self.MAIN_SCRIPT_PATH}')
-                host.cmd(f'cp {self.torrent_file} {self.MAIN_SCRIPT_PATH}/')
                 
-                # Copy mock tracker file to all hosts
-                if self.mock_tracker_file and os.path.exists(self.mock_tracker_file):
-                    host.cmd(f'cp {self.mock_tracker_file} {self.MAIN_SCRIPT_PATH}/')
+                # Copy torrent file
+                host.cmd(f'cp {self.torrent_file} {self.MAIN_SCRIPT_PATH}/')
+                files_copied['torrent'] += 1
+                
+                # Copy mock tracker file if it exists
+                if self.mock_tracker_path and os.path.exists(self.mock_tracker_path):
+                    host.cmd(f'cp {self.mock_tracker_path} {self.MAIN_SCRIPT_PATH}/')
+                    files_copied['mock_tracker'] += 1
         
-        # Copy seeder file ONLY to seeder hosts (h1 through h[num_seeders]) if specified
+        # Copy complete file ONLY to seeder hosts
         if self.seeder_file:
             for i in range(1, self.num_seeders + 1):
                 host = self.net.get(f'h{i}')
                 if host:
                     host.cmd(f'cp {self.seeder_file} {self.MAIN_SCRIPT_PATH}/')
-                    print(f"Copied seeder file '{self.seeder_file}' to seeder host h{i} at {self.MAIN_SCRIPT_PATH}")
+                    files_copied['seeder_file'] += 1
+                    print(f"  ✓ Seeder file copied to h{i}")
         
-        print(f"Torrent file copied to all {self.num_hosts} hosts")
-        if self.mock_tracker_file:
-            print(f"Mock tracker file copied to all {self.num_hosts} hosts")
-        if self.seeder_file:
-            print(f"Complete file copied to {self.num_seeders} seeder host(s) only")
+        # Print summary
+        print(f"  ✓ Torrent file copied to {files_copied['torrent']} hosts")
+        if files_copied['mock_tracker'] > 0:
+            print(f"  ✓ Mock tracker copied to {files_copied['mock_tracker']} hosts")
+        if files_copied['seeder_file'] > 0:
+            print(f"  ✓ Complete file copied to {files_copied['seeder_file']} seeder(s) only")
     
     def _run_seeders(self):
         """Run seeders on the first num_seeders hosts."""
+        if self.num_seeders == 0:
+            print("No seeders to start")
+            return []
+            
         print(f"Starting {self.num_seeders} seeder(s)...")
         
         seeder_processes = []
@@ -262,19 +297,20 @@ class BitTorrentMininet:
             host = self.net.get(f'h{i}')
             if host:
                 seeder_cmd = self._build_bittorrent_command(host.IP(), is_seeder=True)
-                print(f"Starting seeder on h{i} ({host.IP()}): {seeder_cmd}")
+                print(f"  Starting seeder h{i} ({host.IP()})")
+                if self.verbose:
+                    print(f"    Command: {seeder_cmd}")
                 
-                # Create log file for seeder (accessible to Mininet host)
+                # Create log file for seeder
                 seeder_log = os.path.join(self.mininet_log_dir, f"h{i}_seeder.log")
                 
-                # Change to main script directory and run seeder in background with output redirection
+                # Run seeder in background with output redirection
                 full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {seeder_cmd} > {seeder_log} 2>&1 &'
                 host.cmd(full_cmd)
                 
-                print(f"Seeder h{i} output will be logged to: {seeder_log}")
-                seeder_processes.append((f'h{i}', None, seeder_log))  # No process handle for background commands
+                seeder_processes.append((f'h{i}', None, seeder_log))
         
-        print(f"Waiting 10 seconds for {self.num_seeders} seeder(s) to initialize...")
+        print(f"Waiting 10 seconds for seeder(s) to initialize...")
         time.sleep(10)
         return seeder_processes
     
@@ -287,22 +323,21 @@ class BitTorrentMininet:
         print(f"Starting {self.num_leechers} leecher(s)...")
         
         leecher_processes = []
-        # Leechers start from host number (num_seeders + 1)
         for i in range(self.num_seeders + 1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
                 leecher_cmd = self._build_bittorrent_command(host.IP(), is_seeder=False)
-                print(f"Starting leecher on h{i} ({host.IP()}): {leecher_cmd}")
+                print(f"  Starting leecher h{i} ({host.IP()})")
+                if self.verbose:
+                    print(f"    Command: {leecher_cmd}")
                 
-                # Create log file for this leecher (accessible to Mininet host)
+                # Create log file for leecher
                 leecher_log = os.path.join(self.mininet_log_dir, f"h{i}_leecher.log")
                 
-                # Change to main script directory and run leecher with output redirection
+                # Run leecher with output redirection
                 full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {leecher_cmd} > {leecher_log} 2>&1'
                 process = host.popen(full_cmd, shell=True)
                 leecher_processes.append((f'h{i}', process, leecher_log))
-                
-                print(f"Leecher h{i} output will be logged to: {leecher_log}")
         
         return leecher_processes
     
@@ -316,153 +351,167 @@ class BitTorrentMininet:
                 src = os.path.join(self.mininet_log_dir, filename)
                 dst = os.path.join(self.host_log_dir, filename)
                 shutil.copy2(src, dst)
-                print(f"Copied {filename}")
+                print(f"  Copied {filename}")
     
     def _run_bittorrent_clients(self):
         """Run BitTorrent seeders and leechers."""
         if not self.net:
             raise RuntimeError("Network not created. Call _create_network() first.")
         
-        # Create mock tracker file with all host IPs
-        self._create_mock_tracker_file()
+        # Create mock tracker file first
+        mock_tracker_filename = self._create_mock_tracker()
+        if not mock_tracker_filename:
+            print("⚠ Warning: Mock tracker creation failed, clients may not work properly")
         
         # Show all host IPs for reference
-        print("Available hosts:")
+        print("\nHost assignments:")
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                if i <= self.num_seeders:
-                    role = "seeder"
-                else:
-                    role = "leecher"
+                role = "seeder" if i <= self.num_seeders else "leecher"
                 print(f"  h{i} ({role}): {host.IP()}")
+        print()
         
-        # Copy necessary files to hosts
+        # Copy all files to hosts
         self._copy_files_to_hosts()
         
-        # Start seeders first
+        # Start seeders first (if any)
         seeder_processes = []
-        if self.seeder_file and self.num_seeders > 0:
+        if self.num_seeders > 0 and self.seeder_file:
             seeder_processes = self._run_seeders()
+        elif self.num_seeders > 0:
+            print("⚠ Warning: Seeders specified but no seeder file provided")
         
-        # Start leechers after delay
+        # Start leechers
         leecher_processes = self._run_leechers()
         
         # Combine all processes for monitoring
         all_processes = seeder_processes + leecher_processes
         
-        # Wait for leechers to complete (or user interruption)
+        # Wait for completion or interruption
         try:
-            print("BitTorrent clients running. Press Ctrl+C to stop.")
-            print(f"All logs are being written to: {self.host_log_dir}")
+            print(f"\n🚀 BitTorrent simulation running...")
+            print(f"📁 Logs: {self.host_log_dir}")
+            print("Press Ctrl+C to stop\n")
             
             while True:
-                time.sleep(1)
-                # Check if any leechers are still running
-                active_leechers = [name for name, proc, log_file in leecher_processes if proc and proc.poll() is None]
-                if not active_leechers and self.num_leechers > 0:
-                    print("All leechers completed.")
-                    self._copy_logs_to_host()
-                    self._create_summary_log(all_processes)
+                time.sleep(2)
+                
+                # Count active leechers
+                active_leechers = [name for name, proc, log_file in leecher_processes 
+                                 if proc and proc.poll() is None]
+                
+                if self.num_leechers > 0 and not active_leechers:
+                    print("✅ All leechers completed!")
                     break
                 elif self.num_leechers == 0:
-                    # Only seeders running, wait for user interruption
-                    print("Only seeders running. Press Ctrl+C to stop.")
-                    time.sleep(5)  # Check less frequently
+                    # Only seeders running
+                    print("🌱 Only seeders running (press Ctrl+C to stop)")
+                    time.sleep(8)
                     
-            # Show completion status
-            print(f"\nRun completed. Logs available in: {self.host_log_dir}")
+            # Copy logs and create summary
+            self._copy_logs_to_host()
+            self._create_summary_log(all_processes)
+            
+            print(f"\n🎉 Simulation completed! Logs: {self.host_log_dir}")
             self._print_log_summary()
             
         except KeyboardInterrupt:
-            print("\nStopping all processes...")
+            print("\n🛑 Stopping simulation...")
             for name, proc, log_file in leecher_processes:
                 if proc and proc.poll() is None:
                     proc.terminate()
-                    print(f"Stopped {name}")
+                    print(f"  Stopped {name}")
+            
             self._copy_logs_to_host()
             self._create_summary_log(all_processes, interrupted=True)
+            print(f"📁 Logs saved: {self.host_log_dir}")
     
     def _create_summary_log(self, all_processes, interrupted=False):
         """Create a summary log with run information."""
         summary_file = os.path.join(self.host_log_dir, "run_summary.log")
         
         with open(summary_file, 'w') as f:
-            f.write(f"BitTorrent Mininet Run Summary\n")
-            f.write(f"{'='*50}\n")
+            f.write(f"BitTorrent Mininet Simulation Summary\n")
+            f.write(f"{'='*60}\n")
             f.write(f"Timestamp: {datetime.datetime.now()}\n")
-            f.write(f"Torrent file: {self.torrent_file}\n")
-            f.write(f"Seeder file: {self.seeder_file or 'None'}\n")
-            f.write(f"Mock tracker file: {self.mock_tracker_file or 'None'}\n")
-            f.write(f"Topology: {self.topology_name}\n")
-            f.write(f"Number of seeders: {self.num_seeders}\n")
-            f.write(f"Number of leechers: {self.num_leechers}\n")
-            f.write(f"Total hosts: {self.num_hosts}\n")
-            f.write(f"Network delay: {self.delay}\n")
-            f.write(f"Verbose mode: {self.verbose}\n")
-            f.write(f"Auto-install: {self.auto_install}\n")
-            f.write(f"Status: {'INTERRUPTED' if interrupted else 'COMPLETED'}\n")
-            f.write(f"\nHost Information:\n")
+            f.write(f"Status: {'INTERRUPTED' if interrupted else 'COMPLETED'}\n\n")
             
-            # List seeders 
-            for i in range(1, self.num_seeders + 1):
-                host = self.net.get(f'h{i}') if self.net else None
-                f.write(f"h{i} (seeder): {host.IP() if host else 'N/A'}\n")
+            f.write(f"Configuration:\n")
+            f.write(f"  Torrent file: {self.torrent_file}\n")
+            f.write(f"  Seeder file: {self.seeder_file or 'None'}\n")
+            f.write(f"  Mock tracker: {os.path.basename(self.mock_tracker_path) if self.mock_tracker_path else 'None'}\n")
+            f.write(f"  Topology: {self.topology_name}\n")
+            f.write(f"  Network delay: {self.delay}\n")
+            f.write(f"  Verbose mode: {self.verbose}\n\n")
             
-            # List leechers
-            for i in range(self.num_seeders + 1, self.num_hosts + 1):
+            f.write(f"Network Setup:\n")
+            f.write(f"  Seeders: {self.num_seeders}\n")
+            f.write(f"  Leechers: {self.num_leechers}\n")
+            f.write(f"  Total hosts: {self.num_hosts}\n\n")
+            
+            f.write(f"Host Information:\n")
+            for i in range(1, self.num_hosts + 1):
                 host = self.net.get(f'h{i}') if self.net else None
-                f.write(f"h{i} (leecher): {host.IP() if host else 'N/A'}\n")
+                role = "seeder" if i <= self.num_seeders else "leecher"
+                f.write(f"  h{i} ({role}): {host.IP() if host else 'N/A'}\n")
             
             f.write(f"\nLog Files:\n")
             for name, proc, log_file in all_processes:
                 log_filename = os.path.basename(log_file)
-                role = "seeder" if "seeder" in log_filename else "leecher"
-                f.write(f"{role.capitalize()} log: {log_filename}\n")
+                f.write(f"  {log_filename}\n")
     
     def _print_log_summary(self):
         """Print a summary of available log files."""
-        print(f"\nLog files created in {self.host_log_dir}:")
+        print(f"\n📋 Log files in {self.host_log_dir}:")
         
         # Print seeder logs
         for i in range(1, self.num_seeders + 1):
             seeder_log = os.path.join(self.host_log_dir, f"h{i}_seeder.log")
             if os.path.exists(seeder_log):
-                print(f"  - h{i}_seeder.log (seeder output)")
+                print(f"  📄 h{i}_seeder.log")
         
         # Print leecher logs
         for i in range(self.num_seeders + 1, self.num_hosts + 1):
             leecher_log = os.path.join(self.host_log_dir, f"h{i}_leecher.log")
             if os.path.exists(leecher_log):
-                print(f"  - h{i}_leecher.log (leecher output)")
+                print(f"  📄 h{i}_leecher.log")
         
         summary_file = os.path.join(self.host_log_dir, "run_summary.log")
         if os.path.exists(summary_file):
-            print(f"  - run_summary.log (run configuration and summary)")
+            print(f"  📄 run_summary.log")
     
     def _cleanup_processes(self, leecher_processes):
         """Clean up any remaining processes."""
         for name, proc, log_file in leecher_processes:
-            if proc.poll() is None:
+            if proc and proc.poll() is None:
                 proc.terminate()
                 print(f"Cleaned up {name}")
     
     def _cleanup(self):
         """Stop the network and cleanup resources."""
+        print("🧹 Cleaning up...")
+        
         if self.net:
-            print("Stopping network...")
             self.net.stop()
             self.net = None
+            print("  ✓ Network stopped")
         
         # Clean up mock tracker file
-        if self.mock_tracker_file and os.path.exists(self.mock_tracker_file):
-            os.remove(self.mock_tracker_file)
-            print(f"Cleaned up mock tracker file: {self.mock_tracker_file}")
+        if self.mock_tracker_path and os.path.exists(self.mock_tracker_path):
+            try:
+                os.remove(self.mock_tracker_path)
+                print(f"  ✓ Removed mock tracker: {os.path.basename(self.mock_tracker_path)}")
+            except Exception as e:
+                print(f"  ⚠ Could not remove mock tracker: {e}")
         
         # Clean up temporary mininet log directory
         if hasattr(self, 'mininet_log_dir') and os.path.exists(self.mininet_log_dir):
-            shutil.rmtree(self.mininet_log_dir)
-            print(f"Cleaned up temporary log directory: {self.mininet_log_dir}")
+            try:
+                shutil.rmtree(self.mininet_log_dir)
+                print(f"  ✓ Removed temp logs: {self.mininet_log_dir}")
+            except Exception as e:
+                print(f"  ⚠ Could not remove temp logs: {e}")
     
     def run(self):
         """Complete workflow: validate, create network, run clients, cleanup."""
@@ -470,28 +519,49 @@ class BitTorrentMininet:
             # Install required packages first
             self._install_requirements()
             
+            # Validate inputs
             self._validate_torrent_file()
             self._validate_seeder_file()
             self._validate_topology()
+            
+            # Create network and run simulation
             self._create_network()
             self._run_bittorrent_clients()
             
         except KeyboardInterrupt:
-            print("\nInterrupted by user")
+            print("\n⚠ Interrupted by user")
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"❌ Error: {e}")
+            if self.verbose:
+                import traceback
+                traceback.print_exc()
         finally:
             self._cleanup()
 
 
 def _parse_arguments():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Run BitTorrent client in Mininet')
+    parser = argparse.ArgumentParser(
+        description='Run BitTorrent clients in Mininet simulation',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic simulation with 1 seeder and 2 leechers
+  python3 script.py torrent.torrent --seeder-file complete.txt
+  
+  # Custom peer counts with network delay
+  python3 script.py torrent.torrent --seeders 2 --leechers 4 --delay 100ms --seeder-file complete.txt
+  
+  # Verbose mode
+  python3 script.py torrent.torrent --seeder-file complete.txt -v
+        """
+    )
+    
     parser.add_argument('torrent_file', help='Path to the torrent file')
     parser.add_argument('-v', '--verbose', action='store_true',
-                        help='Enable verbose logging for peer selection')
+                        help='Enable verbose logging')
     parser.add_argument('-d', '--deletetorrent', action='store_true',
-                        help='Delete any existing, previous torrent folder')
+                        help='Delete any existing torrent folder (speeds up testing)')
     parser.add_argument('-s', '--seed', action='store_true',
                         help='Seed the torrent after downloading it')
     parser.add_argument('--seeders', type=int, default=1,
@@ -501,11 +571,11 @@ def _parse_arguments():
     parser.add_argument('-t', '--topology', choices=['single'], 
                         default='single', help='Network topology (default: single)')
     parser.add_argument('--delay', default='0ms', 
-                        help='Link delay (e.g., 10ms, 100ms, 1s) (default: 0ms)')
+                        help='Link delay, e.g., 10ms, 100ms, 1s (default: 0ms)')
     parser.add_argument('--seeder-file', 
-                        help='Path to the complete file for seeding (seeders will have this file)')
+                        help='Path to the complete file for seeding (required for seeders)')
     parser.add_argument('--no-auto-install', action='store_true',
-                        help='Disable automatic package installation from requirements.txt')
+                        help='Disable automatic package installation')
     
     return parser.parse_args()
 
@@ -516,15 +586,21 @@ def main():
     
     # Validate arguments
     if args.seeders < 0 or args.leechers < 0:
-        print("Error: Number of seeders and leechers must be non-negative")
+        print("❌ Error: Number of seeders and leechers must be non-negative")
         sys.exit(1)
     
     if args.seeders == 0 and args.leechers == 0:
-        print("Error: Must have at least one seeder or leecher")
+        print("❌ Error: Must have at least one seeder or leecher")
         sys.exit(1)
     
     if args.seeders > 0 and not args.seeder_file:
-        print("Warning: Seeders specified but no seeder file provided. Seeders may not function properly.")
+        print("⚠ Warning: Seeders specified but no seeder file provided")
+        print("   Seeders may not function properly without complete file")
+    
+    print(f"🚀 Starting BitTorrent Mininet Simulation")
+    print(f"   Seeders: {args.seeders}, Leechers: {args.leechers}")
+    print(f"   Network delay: {args.delay}")
+    print()
     
     # Create and run BitTorrent Mininet instance
     bt_mininet = BitTorrentMininet(
