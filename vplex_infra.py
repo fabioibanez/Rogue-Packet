@@ -88,7 +88,7 @@ class BitTorrentMininet:
     
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
                  num_seeders=1, num_leechers=2, topology='single', delay='0ms', seeder_file=None, 
-                 auto_install=True):
+                 auto_install=True, interpreter="python3"):
         self.torrent_file = torrent_file
         self.verbose = verbose
         self.delete_torrent = delete_torrent
@@ -103,7 +103,8 @@ class BitTorrentMininet:
         self.net = None
         self.mock_tracker_path = None  # Will store the path to mock tracker file
         self.log_dir = self._create_log_directory()  # Keep for backward compatibility
-    
+        self.interpreter = interpreter
+
     def _install_requirements(self):
         """Install packages from requirements.txt if it exists."""
         if not self.auto_install:
@@ -235,7 +236,7 @@ class BitTorrentMininet:
         """Build the command string for running the BitTorrent client."""
         # Use just the filename since the torrent file will be copied to the working directory
         torrent_filename = os.path.basename(self.torrent_file)
-        cmd_parts = ['python3', '-m', 'main', torrent_filename]
+        cmd_parts = [self.interpreter, '-m', 'main', torrent_filename]
         
         # Add required arguments
         cmd_parts.extend(['--local-ip', host_ip])
@@ -567,6 +568,7 @@ Examples:
                         help='Path to the complete file for seeding (required for seeders)')
     parser.add_argument('--no-auto-install', action='store_true',
                         help='Disable automatic package installation')
+    parser.add_argument('--interpreter', type=str, help='Python interpreter to use for hosts')
     
     return parser.parse_args()
 
@@ -604,7 +606,8 @@ def main():
         topology=args.topology,
         delay=args.delay,
         seeder_file=args.seeder_file,
-        auto_install=not args.no_auto_install
+        auto_install=not args.no_auto_install,
+        interpreter=args.interpreter
     )
     
     bt_mininet.run()
