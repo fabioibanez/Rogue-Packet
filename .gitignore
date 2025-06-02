@@ -1,6 +1,5 @@
 
 ### CUSTOM ADDED BY ROGUE PACKET PROJECTS ###
-torrents/
 *iso
 *.csv
 
@@ -9,9 +8,6 @@ torrents/
 pytorrent/
 *.png
 *.csv
-
-# Torrent files
-*.torrent
 
 # IntelliJ project files
 .idea
