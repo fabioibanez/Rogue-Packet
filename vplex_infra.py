@@ -34,7 +34,7 @@ class BitTorrentMininet:
     }
     
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
-                 num_hosts=3, topology='single', delay='0ms'):
+                 num_hosts=3, topology='single', delay='0ms', seeder_file=None):
         self.torrent_file = torrent_file
         self.verbose = verbose
         self.delete_torrent = delete_torrent
@@ -42,6 +42,7 @@ class BitTorrentMininet:
         self.num_hosts = num_hosts
         self.topology_name = topology
         self.delay = delay
+        self.seeder_file = seeder_file
         self.net = None
     
     def _validate_torrent_file(self):
@@ -49,7 +50,10 @@ class BitTorrentMininet:
         if not os.path.exists(self.torrent_file):
             raise FileNotFoundError(f"Torrent file '{self.torrent_file}' not found")
     
-    def _validate_topology(self):
+    def _validate_seeder_file(self):
+        """Check if the seeder file exists when specified."""
+        if self.seeder_file and not os.path.exists(self.seeder_file):
+            raise FileNotFoundError(f"Seeder file '{self.seeder_file}' not found")
         """Validate the topology choice."""
         if self.topology_name not in self.TOPOLOGY_MAP:
             available = ', '.join(self.TOPOLOGY_MAP.keys())
@@ -85,7 +89,55 @@ class BitTorrentMininet:
         
         return ' '.join(cmd_parts)
     
-    def _run_bittorrent_client(self):
+    def _copy_files_to_hosts(self):
+        """Copy torrent file to all hosts and seeder file to seeder host."""
+        print("Copying files to hosts...")
+        
+        # Copy torrent file to all hosts
+        for i in range(1, self.num_hosts + 1):
+            host = self.net.get(f'h{i}')
+            if host:
+                # Create a shared directory and copy torrent file
+                host.cmd(f'mkdir -p /tmp/torrents')
+                host.cmd(f'cp {self.torrent_file} /tmp/torrents/')
+        
+        # Copy seeder file to seeder host (h1) if specified
+        if self.seeder_file:
+            h1 = self.net.get('h1')
+            h1.cmd(f'cp {self.seeder_file} /tmp/torrents/')
+            print(f"Copied seeder file '{self.seeder_file}' to seeder host h1")
+    
+    def _run_seeder(self):
+        """Run the seeder on h1."""
+        h1 = self.net.get('h1')
+        seeder_cmd = self._build_bittorrent_command(h1.IP(), is_seeder=True)
+        
+        print(f"Starting seeder on h1 ({h1.IP()}): {seeder_cmd}")
+        
+        # Change to torrents directory and run seeder in background
+        full_cmd = f'cd /tmp/torrents && {seeder_cmd} &'
+        h1.cmd(full_cmd)
+        
+        print("Waiting 10 seconds for seeder to initialize...")
+        time.sleep(10)
+    
+    def _run_leechers(self):
+        """Run leechers on remaining hosts."""
+        print("Starting leechers...")
+        
+        leecher_processes = []
+        for i in range(2, self.num_hosts + 1):
+            host = self.net.get(f'h{i}')
+            if host:
+                leecher_cmd = self._build_bittorrent_command(host.IP(), is_seeder=False)
+                print(f"Starting leecher on h{i} ({host.IP()}): {leecher_cmd}")
+                
+                # Change to torrents directory and run leecher
+                full_cmd = f'cd /tmp/torrents && {leecher_cmd}'
+                process = host.popen(full_cmd.split())
+                leecher_processes.append((f'h{i}', process))
+        
+        return leecher_processes
         """Run the BitTorrent client on the primary host."""
         if not self.net:
             raise RuntimeError("Network not created. Call create_network() first.")
@@ -115,12 +167,13 @@ class BitTorrentMininet:
             self.net = None
     
     def run(self):
-        """Complete workflow: validate, create network, run client, cleanup."""
+        """Complete workflow: validate, create network, run clients, cleanup."""
         try:
             self._validate_torrent_file()
+            self._validate_seeder_file()
             self._validate_topology()
             self._create_network()
-            self._run_bittorrent_client()
+            self._run_bittorrent_clients()
             
         except KeyboardInterrupt:
             print("\nInterrupted by user")
@@ -146,6 +199,8 @@ def _parse_arguments():
                         default='single', help='Network topology (default: single)')
     parser.add_argument('--delay', default='0ms', 
                         help='Link delay (e.g., 10ms, 100ms, 1s) (default: 0ms)')
+    parser.add_argument('--seeder-file', 
+                        help='Path to the complete file for seeding (seeder will have this file)')
     
     return parser.parse_args()
 
@@ -162,7 +217,8 @@ def main():
         seed=args.seed,
         num_hosts=args.hosts,
         topology=args.topology,
-        delay=args.delay
+        delay=args.delay,
+        seeder_file=args.seeder_file
     )
     
     bt_mininet.run()
