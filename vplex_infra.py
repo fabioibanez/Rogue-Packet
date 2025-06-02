@@ -202,35 +202,7 @@ class BitTorrentMininet:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         mock_tracker_filename = f"mock_tracker_{timestamp}.json"
         self.mock_tracker_path = os.path.join(self.MAIN_SCRIPT_PATH, mock_tracker_filename)
-        
-        # Collect peer information in the format expected by MockTracker
-        # Based on the error, MockTracker expects an array of peer objects
-        peers_list = []
-        for i in range(1, self.num_hosts + 1):
-            host = self.net.get(f'h{i}')
-            if host:
-                # Create peer object in the format MockTracker expects
-                peer_data = {
-                    "peer_id": f"peer_{i}",
-                    "ip": host.IP(),
-                    "port": 6881,
-                    "host_name": f"h{i}",
-                    "is_seeder": i <= self.num_seeders
-                }
-                peers_list.append(peer_data)
-        
-        try:
-            # Write just the peers array - MockTracker seems to expect this format
-            with open(self.mock_tracker_path, 'w') as f:
-                json.dump(peers_list, f, indent=2)
-            
-            print(Colors.success(f"Created mock tracker: {self.mock_tracker_path}"))
-            print(Colors.info(f"Total peers: {len(peers_list)} ({self.num_seeders} seeders, {self.num_leechers} leechers)"))
-            return mock_tracker_filename
-            
-        except Exception as e:
-            print(Colors.error(f"Failed to create mock tracker: {e}"))
-            return None
+        return self.mock_tracker_path
     
     def _build_bittorrent_command(self, host_ip, is_seeder=False):
         """Build the command string for running the BitTorrent client."""
