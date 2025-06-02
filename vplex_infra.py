@@ -1,8 +1,8 @@
 #!/usr/bin/python
-from mininet.topo import Topo, SingleSwitchTopo
+from mininet.topo import Topo
 from mininet.net import Mininet
 from mininet.link import TCLink
-from mininet.log import lg, info
+from mininet.log import lg
 from mininet.node import OVSController
 import argparse
 import time
