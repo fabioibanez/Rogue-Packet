@@ -1,8 +1,8 @@
 #!/usr/bin/python
-from mininet.topo import Topo
+from mininet.topo import Topo, SingleSwitchTopo
 from mininet.net import Mininet
 from mininet.link import TCLink
-from mininet.log import lg
+from mininet.log import lg, info
 from mininet.node import OVSController
 import argparse
 import time
@@ -45,13 +45,15 @@ class BitTorrentMininet:
     REQUIREMENTS_PATH = "/home/ubuntu/Rogue-Packet/requirements.txt"
     
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
-                 num_hosts=3, topology='single', delay='0ms', seeder_file=None, 
+                 num_seeders=1, num_leechers=2, topology='single', delay='0ms', seeder_file=None, 
                  auto_install=True):
         self.torrent_file = torrent_file
         self.verbose = verbose
         self.delete_torrent = delete_torrent
         self.seed = seed
-        self.num_hosts = num_hosts
+        self.num_seeders = num_seeders
+        self.num_leechers = num_leechers
+        self.num_hosts = num_seeders + num_leechers  # Total hosts
         self.topology_name = topology
         self.delay = delay
         self.seeder_file = seeder_file
@@ -181,10 +183,10 @@ class BitTorrentMininet:
         return ' '.join(cmd_parts)
     
     def _copy_files_to_hosts(self):
-        """Copy torrent file to all hosts and seeder file to seeder host."""
+        """Copy torrent file to all hosts and seeder file only to seeder hosts."""
         print("Copying files to hosts...")
         
-        # Copy torrent file to the main script directory for all hosts
+        # Copy torrent file to ALL hosts (seeders and leechers)
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
@@ -192,36 +194,54 @@ class BitTorrentMininet:
                 host.cmd(f'mkdir -p {self.MAIN_SCRIPT_PATH}')
                 host.cmd(f'cp {self.torrent_file} {self.MAIN_SCRIPT_PATH}/')
         
-        # Copy seeder file to seeder host (h1) if specified
+        # Copy seeder file ONLY to seeder hosts (h1 through h[num_seeders]) if specified
         if self.seeder_file:
-            h1 = self.net.get('h1')
-            h1.cmd(f'cp {self.seeder_file} {self.MAIN_SCRIPT_PATH}/')
-            print(f"Copied seeder file '{self.seeder_file}' to seeder host h1 at {self.MAIN_SCRIPT_PATH}")
+            for i in range(1, self.num_seeders + 1):
+                host = self.net.get(f'h{i}')
+                if host:
+                    host.cmd(f'cp {self.seeder_file} {self.MAIN_SCRIPT_PATH}/')
+                    print(f"Copied seeder file '{self.seeder_file}' to seeder host h{i} at {self.MAIN_SCRIPT_PATH}")
+        
+        print(f"Torrent file copied to all {self.num_hosts} hosts")
+        if self.seeder_file:
+            print(f"Complete file copied to {self.num_seeders} seeder host(s) only")
     
-    def _run_seeder(self):
-        """Run the seeder on h1."""
-        h1 = self.net.get('h1')
-        seeder_cmd = self._build_bittorrent_command(h1.IP(), is_seeder=True)
+    def _run_seeders(self):
+        """Run seeders on the first num_seeders hosts."""
+        print(f"Starting {self.num_seeders} seeder(s)...")
         
-        print(f"Starting seeder on h1 ({h1.IP()}): {seeder_cmd}")
+        seeder_processes = []
+        for i in range(1, self.num_seeders + 1):
+            host = self.net.get(f'h{i}')
+            if host:
+                seeder_cmd = self._build_bittorrent_command(host.IP(), is_seeder=True)
+                print(f"Starting seeder on h{i} ({host.IP()}): {seeder_cmd}")
+                
+                # Create log file for seeder (accessible to Mininet host)
+                seeder_log = os.path.join(self.mininet_log_dir, f"h{i}_seeder.log")
+                
+                # Change to main script directory and run seeder in background with output redirection
+                full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {seeder_cmd} > {seeder_log} 2>&1 &'
+                host.cmd(full_cmd)
+                
+                print(f"Seeder h{i} output will be logged to: {seeder_log}")
+                seeder_processes.append((f'h{i}', None, seeder_log))  # No process handle for background commands
         
-        # Create log file for seeder (accessible to Mininet host)
-        seeder_log = os.path.join(self.mininet_log_dir, "h1_seeder.log")
-        
-        # Change to main script directory and run seeder in background with output redirection
-        full_cmd = f'cd {self.MAIN_SCRIPT_PATH} && {seeder_cmd} > {seeder_log} 2>&1 &'
-        h1.cmd(full_cmd)
-        
-        print(f"Seeder output will be logged to: {seeder_log}")
-        print("Waiting 10 seconds for seeder to initialize...")
+        print(f"Waiting 10 seconds for {self.num_seeders} seeder(s) to initialize...")
         time.sleep(10)
+        return seeder_processes
     
     def _run_leechers(self):
-        """Run leechers on remaining hosts."""
-        print("Starting leechers...")
+        """Run leechers on the remaining hosts after seeders."""
+        if self.num_leechers == 0:
+            print("No leechers to start")
+            return []
+            
+        print(f"Starting {self.num_leechers} leecher(s)...")
         
         leecher_processes = []
-        for i in range(2, self.num_hosts + 1):
+        # Leechers start from host number (num_seeders + 1)
+        for i in range(self.num_seeders + 1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
                 leecher_cmd = self._build_bittorrent_command(host.IP(), is_seeder=False)
@@ -252,7 +272,7 @@ class BitTorrentMininet:
                 print(f"Copied {filename}")
     
     def _run_bittorrent_clients(self):
-        """Run BitTorrent seeder and leechers."""
+        """Run BitTorrent seeders and leechers."""
         if not self.net:
             raise RuntimeError("Network not created. Call _create_network() first.")
         
@@ -261,18 +281,25 @@ class BitTorrentMininet:
         for i in range(1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                role = "seeder" if i == 1 else "leecher"
+                if i <= self.num_seeders:
+                    role = "seeder"
+                else:
+                    role = "leecher"
                 print(f"  h{i} ({role}): {host.IP()}")
         
         # Copy necessary files to hosts
         self._copy_files_to_hosts()
         
-        # Start seeder first
-        if self.seeder_file:
-            self._run_seeder()
+        # Start seeders first
+        seeder_processes = []
+        if self.seeder_file and self.num_seeders > 0:
+            seeder_processes = self._run_seeders()
         
         # Start leechers after delay
         leecher_processes = self._run_leechers()
+        
+        # Combine all processes for monitoring
+        all_processes = seeder_processes + leecher_processes
         
         # Wait for leechers to complete (or user interruption)
         try:
@@ -282,12 +309,16 @@ class BitTorrentMininet:
             while True:
                 time.sleep(1)
                 # Check if any leechers are still running
-                active_leechers = [name for name, proc, log_file in leecher_processes if proc.poll() is None]
-                if not active_leechers:
+                active_leechers = [name for name, proc, log_file in leecher_processes if proc and proc.poll() is None]
+                if not active_leechers and self.num_leechers > 0:
                     print("All leechers completed.")
                     self._copy_logs_to_host()
-                    self._create_summary_log(leecher_processes)
+                    self._create_summary_log(all_processes)
                     break
+                elif self.num_leechers == 0:
+                    # Only seeders running, wait for user interruption
+                    print("Only seeders running. Press Ctrl+C to stop.")
+                    time.sleep(5)  # Check less frequently
                     
             # Show completion status
             print(f"\nRun completed. Logs available in: {self.host_log_dir}")
@@ -296,13 +327,13 @@ class BitTorrentMininet:
         except KeyboardInterrupt:
             print("\nStopping all processes...")
             for name, proc, log_file in leecher_processes:
-                if proc.poll() is None:
+                if proc and proc.poll() is None:
                     proc.terminate()
                     print(f"Stopped {name}")
             self._copy_logs_to_host()
-            self._create_summary_log(leecher_processes, interrupted=True)
+            self._create_summary_log(all_processes, interrupted=True)
     
-    def _create_summary_log(self, leecher_processes, interrupted=False):
+    def _create_summary_log(self, all_processes, interrupted=False):
         """Create a summary log with run information."""
         summary_file = os.path.join(self.host_log_dir, "run_summary.log")
         
@@ -313,33 +344,45 @@ class BitTorrentMininet:
             f.write(f"Torrent file: {self.torrent_file}\n")
             f.write(f"Seeder file: {self.seeder_file or 'None'}\n")
             f.write(f"Topology: {self.topology_name}\n")
-            f.write(f"Number of hosts: {self.num_hosts}\n")
+            f.write(f"Number of seeders: {self.num_seeders}\n")
+            f.write(f"Number of leechers: {self.num_leechers}\n")
+            f.write(f"Total hosts: {self.num_hosts}\n")
             f.write(f"Network delay: {self.delay}\n")
             f.write(f"Verbose mode: {self.verbose}\n")
             f.write(f"Auto-install: {self.auto_install}\n")
             f.write(f"Status: {'INTERRUPTED' if interrupted else 'COMPLETED'}\n")
             f.write(f"\nHost Information:\n")
-            f.write(f"h1 (seeder): {self.net.get('h1').IP() if self.net else 'N/A'}\n")
             
-            for i in range(2, self.num_hosts + 1):
+            # List seeders 
+            for i in range(1, self.num_seeders + 1):
+                host = self.net.get(f'h{i}') if self.net else None
+                f.write(f"h{i} (seeder): {host.IP() if host else 'N/A'}\n")
+            
+            # List leechers
+            for i in range(self.num_seeders + 1, self.num_hosts + 1):
                 host = self.net.get(f'h{i}') if self.net else None
                 f.write(f"h{i} (leecher): {host.IP() if host else 'N/A'}\n")
             
             f.write(f"\nLog Files:\n")
-            f.write(f"Seeder log: h1_seeder.log\n")
-            for name, proc, log_file in leecher_processes:
+            for name, proc, log_file in all_processes:
                 log_filename = os.path.basename(log_file)
-                f.write(f"Leecher log: {log_filename}\n")
+                role = "seeder" if "seeder" in log_filename else "leecher"
+                f.write(f"{role.capitalize()} log: {log_filename}\n")
     
     def _print_log_summary(self):
         """Print a summary of available log files."""
         print(f"\nLog files created in {self.host_log_dir}:")
-        if os.path.exists(os.path.join(self.host_log_dir, "h1_seeder.log")):
-            print(f"  - h1_seeder.log (seeder output)")
         
-        for i in range(2, self.num_hosts + 1):
-            log_file = os.path.join(self.host_log_dir, f"h{i}_leecher.log")
-            if os.path.exists(log_file):
+        # Print seeder logs
+        for i in range(1, self.num_seeders + 1):
+            seeder_log = os.path.join(self.host_log_dir, f"h{i}_seeder.log")
+            if os.path.exists(seeder_log):
+                print(f"  - h{i}_seeder.log (seeder output)")
+        
+        # Print leecher logs
+        for i in range(self.num_seeders + 1, self.num_hosts + 1):
+            leecher_log = os.path.join(self.host_log_dir, f"h{i}_leecher.log")
+            if os.path.exists(leecher_log):
                 print(f"  - h{i}_leecher.log (leecher output)")
         
         summary_file = os.path.join(self.host_log_dir, "run_summary.log")
@@ -395,14 +438,16 @@ def _parse_arguments():
                         help='Delete any existing, previous torrent folder')
     parser.add_argument('-s', '--seed', action='store_true',
                         help='Seed the torrent after downloading it')
-    parser.add_argument('-k', '--hosts', type=int, default=3,
-                        help='Number of hosts in the network (default: 3)')
+    parser.add_argument('--seeders', type=int, default=1,
+                        help='Number of seeder hosts (default: 1)')
+    parser.add_argument('--leechers', type=int, default=2,
+                        help='Number of leecher hosts (default: 2)')
     parser.add_argument('-t', '--topology', choices=['single'], 
                         default='single', help='Network topology (default: single)')
     parser.add_argument('--delay', default='0ms', 
                         help='Link delay (e.g., 10ms, 100ms, 1s) (default: 0ms)')
     parser.add_argument('--seeder-file', 
-                        help='Path to the complete file for seeding (seeder will have this file)')
+                        help='Path to the complete file for seeding (seeders will have this file)')
     parser.add_argument('--no-auto-install', action='store_true',
                         help='Disable automatic package installation from requirements.txt')
     
@@ -413,13 +458,26 @@ def main():
     """Main entry point."""
     args = _parse_arguments()
     
+    # Validate arguments
+    if args.seeders < 0 or args.leechers < 0:
+        print("Error: Number of seeders and leechers must be non-negative")
+        sys.exit(1)
+    
+    if args.seeders == 0 and args.leechers == 0:
+        print("Error: Must have at least one seeder or leecher")
+        sys.exit(1)
+    
+    if args.seeders > 0 and not args.seeder_file:
+        print("Warning: Seeders specified but no seeder file provided. Seeders may not function properly.")
+    
     # Create and run BitTorrent Mininet instance
     bt_mininet = BitTorrentMininet(
         torrent_file=args.torrent_file,
         verbose=args.verbose,
         delete_torrent=args.deletetorrent,
         seed=args.seed,
-        num_hosts=args.hosts,
+        num_seeders=args.seeders,
+        num_leechers=args.leechers,
         topology=args.topology,
         delay=args.delay,
         seeder_file=args.seeder_file,
