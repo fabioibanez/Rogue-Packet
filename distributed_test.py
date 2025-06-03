@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simplified BitTorrent Network Deployment Script
-Removed synchronization barriers - each VM starts immediately after setup
+Enhanced BitTorrent Network Deployment Script
+Now includes CSV file collection from the BitTorrent client
 """
 
 # Constants
@@ -19,6 +19,7 @@ SEED_FILENAME = "seed_file"
 LOGS_ENDPOINT = '/logs'
 STREAM_ENDPOINT = '/stream'
 COMPLETION_ENDPOINT = '/completion'
+CSV_ENDPOINT = '/csv'
 IP_API_URL = 'https://api.ipify.org'
 
 # HTTP Constants
@@ -112,6 +113,7 @@ class LogHandler(BaseHTTPRequestHandler):
     logs_dir = LOGS_DIR
     completion_status = {}
     instance_status = {}
+    csv_files = {}  # Track CSV files received
     run_name = None
     last_display_time = 0
     
@@ -121,6 +123,7 @@ class LogHandler(BaseHTTPRequestHandler):
     STATUS_INSTALLING = "installing"
     STATUS_DOWNLOADING = "downloading"
     STATUS_RUNNING = "running"
+    STATUS_COLLECTING_CSV = "collecting_csv"
     STATUS_COMPLETED = "completed"
     STATUS_ERROR = "error"
     
@@ -128,7 +131,9 @@ class LogHandler(BaseHTTPRequestHandler):
     def set_run_name(cls, run_name):
         cls.run_name = run_name
         run_dir = os.path.join(cls.logs_dir, run_name)
+        csv_dir = os.path.join(run_dir, "csv_files")
         os.makedirs(run_dir, exist_ok=True)
+        os.makedirs(csv_dir, exist_ok=True)
     
     @classmethod
     def update_instance_status(cls, instance_id, status, progress=None, message=None):
@@ -182,21 +187,32 @@ class LogHandler(BaseHTTPRequestHandler):
                 print(f"  {COLOR_GREEN}🌱 Seeders:{COLOR_RESET}")
                 for instance_id, info in roles['seeders']:
                     status_emoji, status_text = cls._get_status_display(info['status'], info.get('progress'))
-                    print(f"    {status_emoji} {instance_id}: {status_text}")
+                    csv_info = cls._get_csv_info(instance_id)
+                    print(f"    {status_emoji} {instance_id}: {status_text}{csv_info}")
             
             if roles['leechers']:
                 print(f"  {COLOR_BLUE}📥 Leechers:{COLOR_RESET}")
                 for instance_id, info in roles['leechers']:
                     status_emoji, status_text = cls._get_status_display(info['status'], info.get('progress'))
-                    print(f"    {status_emoji} {instance_id}: {status_text}")
+                    csv_info = cls._get_csv_info(instance_id)
+                    print(f"    {status_emoji} {instance_id}: {status_text}{csv_info}")
         
         # Summary
         total_instances = len(cls.instance_status)
         completed_count = len([i for i in cls.instance_status.values() if i['status'] == cls.STATUS_COMPLETED])
         running_count = len([i for i in cls.instance_status.values() if i['status'] == cls.STATUS_RUNNING])
+        csv_count = len(cls.csv_files)
         
         print(f"\n{COLOR_BOLD}📊 Summary:{COLOR_RESET}")
-        print(f"  Total: {total_instances} | Running: {running_count} | Completed: {completed_count}")
+        print(f"  Total: {total_instances} | Running: {running_count} | Completed: {completed_count} | CSV Files: {csv_count}")
+    
+    @classmethod
+    def _get_csv_info(cls, instance_id):
+        """Get CSV file info for display"""
+        if instance_id in cls.csv_files:
+            csv_count = len(cls.csv_files[instance_id])
+            return f" {COLOR_CYAN}[{csv_count} CSV]{COLOR_RESET}"
+        return ""
     
     @classmethod 
     def _get_status_display(cls, status, progress=None):
@@ -207,6 +223,7 @@ class LogHandler(BaseHTTPRequestHandler):
             cls.STATUS_INSTALLING: ("⚙️", "Installing packages"),
             cls.STATUS_DOWNLOADING: ("⬇️", "Downloading files"),
             cls.STATUS_RUNNING: ("🚀", f"Running BitTorrent {progress}%" if progress else "Running BitTorrent"),
+            cls.STATUS_COLLECTING_CSV: ("📊", "Collecting CSV files"),
             cls.STATUS_COMPLETED: ("🎉", "Completed"),
             cls.STATUS_ERROR: ("❌", "Error")
         }
@@ -225,9 +242,62 @@ class LogHandler(BaseHTTPRequestHandler):
             self._handle_stream()
         elif self.path == COMPLETION_ENDPOINT:
             self._handle_completion()
+        elif self.path == CSV_ENDPOINT:
+            self._handle_csv()
         else:
             self.send_response(HTTP_NOT_FOUND)
             self.end_headers()
+    
+    def _handle_csv(self):
+        """Handle CSV file uploads from instances"""
+        content_type = self.headers.get('Content-Type', '')
+        if not content_type.startswith('multipart/form-data'):
+            self.send_response(400)
+            self.end_headers()
+            return
+        
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length)
+        
+        boundary = content_type.split('boundary=')[1].encode()
+        parts = post_data.split(b'--' + boundary)
+        
+        instance_id = None
+        csv_filename = None
+        csv_data = None
+        
+        for part in parts:
+            if b'name="instance_id"' in part:
+                instance_id = part.split(b'\r\n\r\n')[1].split(b'\r\n')[0].decode()
+            elif b'name="csv_filename"' in part:
+                csv_filename = part.split(b'\r\n\r\n')[1].split(b'\r\n')[0].decode()
+            elif b'name="csv_file"' in part:
+                csv_data = part.split(b'\r\n\r\n', 1)[1].rsplit(b'\r\n', 1)[0]
+        
+        if instance_id and csv_filename and csv_data:
+            # Save CSV file
+            run_dir = os.path.join(self.logs_dir, self.run_name)
+            csv_dir = os.path.join(run_dir, "csv_files")
+            os.makedirs(csv_dir, exist_ok=True)
+            
+            csv_path = os.path.join(csv_dir, f"{instance_id}_{csv_filename}")
+            with open(csv_path, 'wb') as f:
+                f.write(csv_data)
+            
+            # Track CSV file
+            if instance_id not in self.csv_files:
+                self.csv_files[instance_id] = []
+            self.csv_files[instance_id].append({
+                'filename': csv_filename,
+                'path': csv_path,
+                'size': len(csv_data),
+                'timestamp': time.time()
+            })
+            
+            print(f"{COLOR_CYAN}📊 CSV file received: {instance_id}/{csv_filename} ({len(csv_data)} bytes){COLOR_RESET}")
+        
+        self.send_response(HTTP_OK)
+        self.end_headers()
     
     def _handle_logs(self):
         content_type = self.headers.get('Content-Type', '')
@@ -307,6 +377,8 @@ class LogHandler(BaseHTTPRequestHandler):
             self.update_instance_status(instance_id, self.STATUS_DOWNLOADING)
         elif 'starting bittorrent client' in log_lower:
             self.update_instance_status(instance_id, self.STATUS_RUNNING)
+        elif 'collecting csv files' in log_lower:
+            self.update_instance_status(instance_id, self.STATUS_COLLECTING_CSV)
         elif 'bittorrent client finished' in log_lower:
             self.update_instance_status(instance_id, self.STATUS_COMPLETED)
         elif not is_seeder and ('downloaded' in log_lower or 'progress' in log_lower or '%' in log_chunk):
@@ -451,10 +523,49 @@ send_log_update() {{
         http://{controller_ip}:{controller_port}{STREAM_ENDPOINT} > /dev/null 2>&1 || true
 }}
 
+# Function to upload CSV files to controller
+upload_csv_files() {{
+    echo "=== Searching for CSV files ==="
+    send_log_update "Collecting CSV files from project directory..."
+    
+    CSV_COUNT=0
+    
+    # Search for CSV files in the project directory and subdirectories
+    find {BITTORRENT_PROJECT_DIR} -name "*.csv" -type f | while read csv_file; do
+        if [ -f "$csv_file" ]; then
+            csv_filename=$(basename "$csv_file")
+            csv_size=$(stat -f%z "$csv_file" 2>/dev/null || stat -c%s "$csv_file" 2>/dev/null || echo "unknown")
+            
+            echo "Found CSV file: $csv_file (size: $csv_size bytes)"
+            send_log_update "Found CSV file: $csv_filename ($csv_size bytes)"
+            
+            # Upload the CSV file
+            curl -X POST \\
+                -F "instance_id={instance_id}" \\
+                -F "csv_filename=$csv_filename" \\
+                -F "csv_file=@$csv_file" \\
+                http://{controller_ip}:{controller_port}{CSV_ENDPOINT} || true
+            
+            CSV_COUNT=$((CSV_COUNT + 1))
+        fi
+    done
+    
+    if [ $CSV_COUNT -eq 0 ]; then
+        echo "No CSV files found in {BITTORRENT_PROJECT_DIR}"
+        send_log_update "No CSV files found in project directory"
+    else
+        echo "Uploaded $CSV_COUNT CSV files"
+        send_log_update "Successfully uploaded $CSV_COUNT CSV files"
+    fi
+}}
+
 # Function to send final logs on exit
 send_final_logs() {{
     echo "=== Sending emergency/final logs to controller ==="
     send_log_update "Instance {instance_id} is shutting down (potentially interrupted)"
+    
+    # Try to collect CSV files even during emergency shutdown
+    upload_csv_files
     
     if [ -f {LOG_FILE_PATH} ]; then
         echo "Sending final BitTorrent logs..."
@@ -595,6 +706,10 @@ echo "=== BitTorrent client finished ==="
 # Stop log streaming
 pkill -f "tail -f" 2>/dev/null || true
 
+echo "=== Collecting CSV files from project directory ==="
+send_log_update "Collecting CSV files from project directory..."
+upload_csv_files
+
 # Append startup log to main log for debugging
 echo "" >> {LOG_FILE_PATH}
 echo "=======================================" >> {LOG_FILE_PATH}
@@ -694,6 +809,17 @@ class BitTorrentDeployer:
                             file_size = os.path.getsize(file_path)
                             print(f"{COLOR_GREEN}📝 {file} ({file_size} bytes){COLOR_RESET}")
                 
+                # Show CSV files collected
+                csv_dir = os.path.join(run_dir, "csv_files")
+                if os.path.exists(csv_dir):
+                    csv_files = [f for f in os.listdir(csv_dir) if f.endswith('.csv')]
+                    if csv_files:
+                        print(f"\n{COLOR_BOLD}=== CSV Files Collected ==={COLOR_RESET}")
+                        for csv_file in csv_files:
+                            csv_path = os.path.join(csv_dir, csv_file)
+                            csv_size = os.path.getsize(csv_path)
+                            print(f"{COLOR_CYAN}📊 {csv_file} ({csv_size} bytes){COLOR_RESET}")
+                
                 if self.handler.completion_status:
                     print(f"\n{COLOR_BOLD}=== Instance Status ==={COLOR_RESET}")
                     for instance_id, status in self.handler.completion_status.items():
@@ -721,6 +847,8 @@ class BitTorrentDeployer:
         
         print(f"\n{COLOR_BOLD}{COLOR_YELLOW}🛑 Emergency cleanup completed{COLOR_RESET}")
         print(f"{COLOR_BOLD}{COLOR_BLUE}📁 Partial logs saved in: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
+        if os.path.exists(os.path.join(LOGS_DIR, self.run_name, "csv_files")):
+            print(f"{COLOR_BOLD}{COLOR_CYAN}📊 CSV files saved in: {LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
     
     def _get_public_ip(self):
         response = requests.get(IP_API_URL)
@@ -802,9 +930,10 @@ class BitTorrentDeployer:
     
     def run(self):
         try:
-            print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 Simplified BitTorrent Network Deployment{COLOR_RESET}")
+            print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 Enhanced BitTorrent Network Deployment with CSV Collection{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 Run Name: {self.run_name}{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_BLUE}💾 Logs Directory: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
+            print(f"{COLOR_BOLD}{COLOR_CYAN}📊 CSV Files Directory: {LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C at any time for graceful cleanup{COLOR_RESET}")
             print(f"{COLOR_CYAN}🚀 Each VM will start BitTorrent immediately after setup (no synchronization){COLOR_RESET}")
             
@@ -818,6 +947,7 @@ class BitTorrentDeployer:
             self.handler = self.log_server.start()
             print(f"\n{COLOR_GREEN}🌐 Log server started on port {self.config.get_controller_port()}{COLOR_RESET}")
             print(f"{COLOR_GREEN}🌍 Controller IP: {self.controller_ip}{COLOR_RESET}")
+            print(f"{COLOR_CYAN}📊 CSV collection endpoint: /csv{COLOR_RESET}")
             
             # Get URLs
             torrent_url = self.config.get_bittorrent_config()['torrent_url']
@@ -867,8 +997,10 @@ class BitTorrentDeployer:
             # Wait for completion
             print(f"\n{COLOR_BOLD}=== Live Status Dashboard ==={COLOR_RESET}")
             print("🚀 Each instance runs BitTorrent immediately after setup")
+            print("📊 CSV files will be automatically collected after BitTorrent completion")
             print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes...")
             print(f"📁 Logs being saved to: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
+            print(f"📊 CSV files being saved to: {COLOR_CYAN}{LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C anytime to stop and cleanup{COLOR_RESET}")
             print("\n" + "=" * 80)
             
@@ -887,9 +1019,11 @@ class BitTorrentDeployer:
                 print(f"\n{COLOR_YELLOW}⚠ Timeout reached, some instances may not have completed{COLOR_RESET}")
                 LogHandler.display_status_dashboard()
             
-            # Process logs
-            print(f"\n{COLOR_BOLD}=== Log Summary ==={COLOR_RESET}")
+            # Process logs and CSV files
+            print(f"\n{COLOR_BOLD}=== Results Summary ==={COLOR_RESET}")
             run_dir = os.path.join(LOGS_DIR, self.run_name)
+            csv_dir = os.path.join(run_dir, "csv_files")
+            
             for instance_id, status in self.handler.completion_status.items():
                 final_log = os.path.join(run_dir, f"{instance_id}.log")
                 stream_log = os.path.join(run_dir, f"{instance_id}_stream.log")
@@ -901,6 +1035,29 @@ class BitTorrentDeployer:
                 
                 if os.path.exists(stream_log):
                     print(f"  {COLOR_CYAN}📡 Stream log: {stream_log}{COLOR_RESET}")
+                
+                # Show CSV files for this instance
+                if instance_id in self.handler.csv_files:
+                    csv_info = self.handler.csv_files[instance_id]
+                    print(f"  {COLOR_CYAN}📊 CSV files: {len(csv_info)} files{COLOR_RESET}")
+                    for csv_file in csv_info:
+                        print(f"    📊 {csv_file['filename']} ({csv_file['size']} bytes)")
+            
+            # CSV Summary
+            total_csv_files = sum(len(files) for files in self.handler.csv_files.values())
+            if total_csv_files > 0:
+                print(f"\n{COLOR_BOLD}=== CSV Files Summary ==={COLOR_RESET}")
+                print(f"{COLOR_CYAN}📊 Total CSV files collected: {total_csv_files}{COLOR_RESET}")
+                print(f"{COLOR_CYAN}📁 CSV files location: {csv_dir}{COLOR_RESET}")
+                
+                if os.path.exists(csv_dir):
+                    all_csv_files = [f for f in os.listdir(csv_dir) if f.endswith('.csv')]
+                    for csv_file in all_csv_files:
+                        csv_path = os.path.join(csv_dir, csv_file)
+                        csv_size = os.path.getsize(csv_path)
+                        print(f"  📊 {csv_file} ({csv_size} bytes)")
+            else:
+                print(f"\n{COLOR_YELLOW}⚠ No CSV files were collected{COLOR_RESET}")
             
             # Cleanup resources
             print(f"\n{COLOR_BOLD}=== Cleanup ==={COLOR_RESET}")
@@ -911,8 +1068,10 @@ class BitTorrentDeployer:
             self.log_server.stop()
             print(f"{COLOR_GREEN}✓ Log server stopped{COLOR_RESET}")
             
-            print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 Simplified BitTorrent network test completed!{COLOR_RESET}")
+            print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 Enhanced BitTorrent network test completed!{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 All logs saved in: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
+            if total_csv_files > 0:
+                print(f"{COLOR_BOLD}{COLOR_CYAN}📊 {total_csv_files} CSV files saved in: {LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
             
             return self.handler.completion_status
             
