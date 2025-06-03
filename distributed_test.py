@@ -471,8 +471,8 @@ class AWSManager:
             )
         return self.region_clients[region]
     
-    def create_bittorrent_security_group(self, region):
-        """Create a permissive security group for BitTorrent testing"""
+    def create_simple_security_group(self, region):
+        """Create a simple All-All security group matching the image"""
         if region in self.region_security_groups:
             return self.region_security_groups[region], None
             
@@ -480,8 +480,8 @@ class AWSManager:
             ec2_client = self.get_ec2_client(region)
             
             # Create security group
-            group_name = f"bittorrent-test-{int(time.time())}"
-            group_description = "Permissive security group for BitTorrent network testing"
+            group_name = f"bittorrent-all-{int(time.time())}"
+            group_description = "All traffic allowed - BitTorrent testing"
             
             response = ec2_client.create_security_group(
                 GroupName=group_name,
@@ -490,96 +490,41 @@ class AWSManager:
             
             security_group_id = response['GroupId']
             
-            # Add comprehensive inbound rules for BitTorrent
-            inbound_rules = [
-                # HTTP/HTTPS for controller communication
-                {
-                    'IpProtocol': 'tcp',
-                    'FromPort': 80,
-                    'ToPort': 80,
-                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
-                },
-                {
-                    'IpProtocol': 'tcp',
-                    'FromPort': 443,
-                    'ToPort': 443,
-                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
-                },
-                # SSH for debugging
-                {
-                    'IpProtocol': 'tcp',
-                    'FromPort': 22,
-                    'ToPort': 22,
-                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
-                },
-                # Controller port
-                {
-                    'IpProtocol': 'tcp',
-                    'FromPort': 8080,
-                    'ToPort': 8080,
-                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
-                },
-                # BitTorrent peer ports (wide range for peer connections)
-                {
-                    'IpProtocol': 'tcp',
-                    'FromPort': 6881,
-                    'ToPort': 6999,
-                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
-                },
-                # Additional BitTorrent range
-                {
-                    'IpProtocol': 'tcp',
-                    'FromPort': 49152,
-                    'ToPort': 65535,
-                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
-                },
-                # UDP for DHT and tracker communication
-                {
-                    'IpProtocol': 'udp',
-                    'FromPort': 6881,
-                    'ToPort': 6999,
-                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
-                },
-                # UDP DHT port range
-                {
-                    'IpProtocol': 'udp',
-                    'FromPort': 49152,
-                    'ToPort': 65535,
-                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
-                },
-                # Allow all ICMP for network diagnostics
-                {
-                    'IpProtocol': 'icmp',
-                    'FromPort': -1,
-                    'ToPort': -1,
-                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
-                }
-            ]
+            # Add simple All-All inbound rule (matching your image)
+            ec2_client.authorize_security_group_ingress(
+                GroupId=security_group_id,
+                IpPermissions=[
+                    {
+                        'IpProtocol': '-1',  # All protocols
+                        'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                    }
+                ]
+            )
             
-            # Add inbound rules in batches to avoid API limits
-            for rule in inbound_rules:
-                try:
-                    ec2_client.authorize_security_group_ingress(
-                        GroupId=security_group_id,
-                        IpPermissions=[rule]
-                    )
-                except Exception as rule_error:
-                    print(f"{COLOR_YELLOW}⚠ Warning: Could not add inbound rule {rule}: {rule_error}{COLOR_RESET}")
-            
-            # Ensure all outbound traffic is allowed (usually default, but let's be explicit)
+            # Remove default outbound rule and add All-All outbound rule
+            # First get the default outbound rules to remove them
             try:
-                ec2_client.authorize_security_group_egress(
-                    GroupId=security_group_id,
-                    IpPermissions=[
-                        {
-                            'IpProtocol': '-1',  # All protocols
-                            'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
-                        }
-                    ]
-                )
-            except Exception as egress_error:
-                # This might fail if the rule already exists, which is fine
-                pass
+                sg_info = ec2_client.describe_security_groups(GroupIds=[security_group_id])
+                default_egress = sg_info['SecurityGroups'][0]['IpPermissionsEgress']
+                
+                if default_egress:
+                    ec2_client.revoke_security_group_egress(
+                        GroupId=security_group_id,
+                        IpPermissions=default_egress
+                    )
+            except Exception:
+                pass  # Ignore if we can't remove default rules
+            
+            # Add our All-All outbound rule
+            ec2_client.authorize_security_group_egress(
+                GroupId=security_group_id,
+                IpPermissions=[
+                    {
+                        'IpProtocol': '-1',  # All protocols
+                        'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                    }
+                ]
+            )
             
             self.region_security_groups[region] = security_group_id
             return security_group_id, None
@@ -765,7 +710,20 @@ echo "Testing network connectivity..."
 ping -c 3 8.8.8.8 > /dev/null 2>&1 && echo "Internet connectivity: OK" || echo "Internet connectivity: FAILED"
 curl -s http://{controller_ip}:{controller_port}/stream > /dev/null 2>&1 && echo "Controller connectivity: OK" || echo "Controller connectivity: FAILED"
 
-send_log_update "Network configuration completed"
+# Test network connectivity and ports
+echo "Testing network connectivity..."
+ping -c 3 8.8.8.8 > /dev/null 2>&1 && echo "Internet connectivity: OK" || echo "Internet connectivity: FAILED"
+curl -s http://{controller_ip}:{controller_port}/stream > /dev/null 2>&1 && echo "Controller connectivity: OK" || echo "Controller connectivity: FAILED"
+
+# Test if we can bind to BitTorrent ports
+echo "Testing port availability..."
+netstat -tuln | grep -q ":6881 " && echo "Port 6881: Already in use" || echo "Port 6881: Available"
+
+# Show current network configuration
+echo "Network interface configuration:"
+ip addr show | grep -E "(inet |UP|DOWN)" || ifconfig | grep -E "(inet |UP|DOWN)" || true
+
+send_log_update "Network configuration completed - Public: $PUBLIC_IP, Private: $PRIVATE_IP"
 
 echo "=== Installing System Packages ==="
 send_log_update "Installing system packages..."
@@ -1061,13 +1019,13 @@ class BitTorrentDeployer:
         region_name = region_config['name']
         instance_ids = []
         
-        # Create security group for this region
-        security_group_id, sg_error = self.aws_manager.create_bittorrent_security_group(region_name)
+        # Create simple All-All security group for this region (matching the image)
+        security_group_id, sg_error = self.aws_manager.create_simple_security_group(region_name)
         if sg_error:
             print(f"{COLOR_RED}✗ Failed to create security group in {region_name}: {sg_error}{COLOR_RESET}")
             return region_name, []
         
-        print(f"{COLOR_GREEN}✓ Created security group {security_group_id} in {region_name}{COLOR_RESET}")
+        print(f"{COLOR_GREEN}✓ Created All-All security group {security_group_id} in {region_name}{COLOR_RESET}")
         
         # Deploy seeders
         for i in range(region_config['seeders']):
@@ -1145,7 +1103,7 @@ class BitTorrentDeployer:
             print(f"📂 GitHub repo: {github_repo}")
             print(f"📁 Torrent URL: {torrent_url}")
             print(f"🌱 Seed file URL: {seed_fileurl}")
-            print(f"🔒 Security: Auto-creating permissive security groups for BitTorrent")
+            print(f"🔒 Security: Creating All-All security groups (matching your setup)")
             
             print(f"\n{COLOR_BOLD}=== Deployment Plan ==={COLOR_RESET}")
             for region in self.config.get_regions():
