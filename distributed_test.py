@@ -1,15 +1,4 @@
-def wait_for_completion(self, handler, timeout_minutes):
-        """Wait for all instances to complete"""
-        timeout = time.time() + (timeout_minutes * 60)
-        
-        while time.time() < timeout:
-            if self.cleanup_in_progress:
-                return False
-            if len(handler.completion_status) >= self.total_instance_count:
-                return True
-            time.sleep(COMPLETION_CHECK_INTERVAL)
-        
-        return False#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Enhanced BitTorrent Network Deployment Script
 Now includes CSV file collection from the BitTorrent client
@@ -911,13 +900,9 @@ class BitTorrentDeployer:
         
         LogHandler.set_run_name(self.run_name)
         
-        # Calculate instance counts
-        self.total_seeder_count = 0
-        self.total_leecher_count = 0
+        # Calculate total instance count
         for region in self.config.get_regions():
-            self.total_seeder_count += region['seeders']
-            self.total_leecher_count += region['leechers']
-        self.total_instance_count = self.total_seeder_count + self.total_leecher_count
+            self.total_instance_count += region['seeders'] + region['leechers']
         
         # Set up signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -1030,13 +1015,9 @@ class BitTorrentDeployer:
         print(f"{COLOR_GREEN}✅ All AMIs found successfully across {len(all_regions)} regions{COLOR_RESET}")
         return region_ami_map, None
     
-    def deploy_seeders_only(self, region_config, torrent_url, seed_fileurl, ami_id):
-        """Deploy only seeders for this region"""
+    def deploy_region(self, region_config, torrent_url, seed_fileurl, ami_id):
         region_name = region_config['name']
         instance_ids = []
-        
-        if region_config['seeders'] == 0:
-            return region_name, []
         
         # Create simple All-All security group for this region (matching the image)
         security_group_id, sg_error = self.aws_manager.create_simple_security_group(region_name)
@@ -1046,7 +1027,7 @@ class BitTorrentDeployer:
         
         print(f"{COLOR_GREEN}✓ Created All-All security group {security_group_id} in {region_name}{COLOR_RESET}")
         
-        # Deploy only seeders
+        # Deploy seeders
         for i in range(region_config['seeders']):
             instance_id = f"{region_name}-{ROLE_SEEDER}-{i}"
             user_data = self.aws_manager.generate_user_data(
@@ -1062,29 +1043,7 @@ class BitTorrentDeployer:
             ec2_id = self.aws_manager.launch_instance(region_name, user_data, ami_id, security_group_id)
             instance_ids.append(ec2_id)
         
-        return region_name, instance_ids
-    
-    def deploy_leechers_only(self, region_config, torrent_url, seed_fileurl, ami_id):
-        """Deploy only leechers for this region"""
-        region_name = region_config['name']
-        instance_ids = []
-        
-        if region_config['leechers'] == 0:
-            return region_name, []
-        
-        # Use existing security group (should already be created during seeder phase)
-        if region_name not in self.aws_manager.region_security_groups:
-            # Fallback: create security group if not exists
-            security_group_id, sg_error = self.aws_manager.create_simple_security_group(region_name)
-            if sg_error:
-                print(f"{COLOR_RED}✗ Failed to create security group in {region_name}: {sg_error}{COLOR_RESET}")
-                return region_name, []
-        else:
-            security_group_id = self.aws_manager.region_security_groups[region_name]
-        
-        print(f"{COLOR_BLUE}📥 Deploying leechers in {region_name} using security group {security_group_id}{COLOR_RESET}")
-        
-        # Deploy only leechers
+        # Deploy leechers
         for i in range(region_config['leechers']):
             instance_id = f"{region_name}-{ROLE_LEECHER}-{i}"
             user_data = self.aws_manager.generate_user_data(
@@ -1102,42 +1061,16 @@ class BitTorrentDeployer:
         
         return region_name, instance_ids
     
-    def wait_for_all_seeders_ready(self, handler, timeout_minutes):
-        """Wait for all seeders to reach STATUS_RUNNING"""
-        print(f"\n{COLOR_BOLD}=== Waiting for All Seeders to be Ready ==={COLOR_RESET}")
-        print(f"🌱 Waiting for {self.total_seeder_count} seeders to start BitTorrent...")
-        print(f"⏱️  Timeout: {timeout_minutes} minutes")
-        
+    def wait_for_completion(self, handler, timeout_minutes):
         timeout = time.time() + (timeout_minutes * 60)
         
         while time.time() < timeout:
             if self.cleanup_in_progress:
                 return False
-            
-            # Count running seeders
-            running_seeders = 0
-            total_seeders = 0
-            
-            for instance_id, status_info in handler.instance_status.items():
-                if 'seeder' in instance_id:
-                    total_seeders += 1
-                    if status_info['status'] in [handler.STATUS_RUNNING, handler.STATUS_COMPLETED]:
-                        running_seeders += 1
-            
-            # Update display
-            if total_seeders > 0:
-                print(f"\r🌱 Seeders ready: {running_seeders}/{total_seeders} ({(running_seeders/total_seeders)*100:.1f}%)", end='', flush=True)
-            
-            # Check if all seeders are ready
-            if running_seeders >= self.total_seeder_count and running_seeders > 0:
-                print(f"\n{COLOR_GREEN}✅ All {running_seeders} seeders are ready and running BitTorrent!{COLOR_RESET}")
-                print(f"{COLOR_CYAN}⏳ Waiting 30 seconds for seeders to fully establish connections...{COLOR_RESET}")
-                time.sleep(30)  # Buffer time for seeders to be fully operational
+            if len(handler.completion_status) >= self.total_instance_count:
                 return True
-            
-            time.sleep(5)  # Check every 5 seconds
+            time.sleep(COMPLETION_CHECK_INTERVAL)
         
-        print(f"\n{COLOR_YELLOW}⚠ Timeout: Only {running_seeders}/{self.total_seeder_count} seeders ready{COLOR_RESET}")
         return False
     
     def run(self):
@@ -1147,8 +1080,7 @@ class BitTorrentDeployer:
             print(f"{COLOR_BOLD}{COLOR_BLUE}💾 Logs Directory: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_CYAN}📊 CSV Files Directory: {LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C at any time for graceful cleanup{COLOR_RESET}")
-            print(f"{COLOR_GREEN}🌱 Phase 1: Deploy seeders first and wait for them to be ready{COLOR_RESET}")
-            print(f"{COLOR_BLUE}📥 Phase 2: Deploy leechers after seeders are serving{COLOR_RESET}")
+            print(f"{COLOR_CYAN}🚀 Each VM will start BitTorrent immediately after setup (no synchronization){COLOR_RESET}")
             
             # Look up AMIs
             region_ami_map, ami_error = self._lookup_and_validate_amis()
@@ -1177,110 +1109,42 @@ class BitTorrentDeployer:
             for region in self.config.get_regions():
                 ami_id = region_ami_map[region['name']]
                 print(f"🌍 Region {region['name']}: {COLOR_GREEN}{region['seeders']} seeders{COLOR_RESET}, {COLOR_BLUE}{region['leechers']} leechers{COLOR_RESET} (AMI: {ami_id})")
-            print(f"📊 Total: {COLOR_GREEN}{self.total_seeder_count} seeders{COLOR_RESET}, {COLOR_BLUE}{self.total_leecher_count} leechers{COLOR_RESET} = {COLOR_BOLD}{self.total_instance_count} instances{COLOR_RESET}")
-            print(f"{COLOR_YELLOW}🔄 Two-phase deployment: Seeders first, then leechers{COLOR_RESET}")
+            print(f"📊 Total instances: {COLOR_BOLD}{self.total_instance_count}{COLOR_RESET}")
             
-            # =================================================================
-            # PHASE 1: DEPLOY ALL SEEDERS FIRST
-            # =================================================================
-            print(f"\n{COLOR_BOLD}{COLOR_GREEN}=== Phase 1: Deploying All Seeders ==={COLOR_RESET}")
-            print(f"🌱 Deploying {self.total_seeder_count} seeders across {len(self.config.get_regions())} regions...")
-            
-            seeder_futures = []
+            # Deploy instances
+            print(f"\n{COLOR_BOLD}=== Launching Instances ==={COLOR_RESET}")
             with ThreadPoolExecutor() as executor:
-                for region in self.config.get_regions():
-                    if region['seeders'] > 0:  # Only deploy if there are seeders
-                        ami_id = region_ami_map[region['name']]
-                        seeder_futures.append(
-                            executor.submit(
-                                self.deploy_seeders_only,
-                                region,
-                                torrent_url,
-                                seed_fileurl,
-                                ami_id
-                            )
-                        )
+                futures = []
                 
-                # Collect seeder instance IDs
-                for future in seeder_futures:
+                for region in self.config.get_regions():
+                    ami_id = region_ami_map[region['name']]
+                    futures.append(
+                        executor.submit(
+                            self.deploy_region,
+                            region,
+                            torrent_url,
+                            seed_fileurl,
+                            ami_id
+                        )
+                    )
+                
+                for future in futures:
                     if self.cleanup_in_progress:
                         break
-                    region_name, seeder_instance_ids = future.result()
-                    if region_name not in self.region_instances:
-                        self.region_instances[region_name] = []
-                    self.region_instances[region_name].extend(seeder_instance_ids)
-                    if seeder_instance_ids:
-                        print(f"{COLOR_GREEN}✓ Launched {len(seeder_instance_ids)} seeders in {region_name}{COLOR_RESET}")
+                    region_name, instance_ids = future.result()
+                    self.region_instances[region_name] = instance_ids
+                    print(f"{COLOR_GREEN}✓ Launched {len(instance_ids)} instances in {region_name}{COLOR_RESET}")
             
             if self.cleanup_in_progress:
                 return {}
-            
-            if self.total_seeder_count > 0:
-                print(f"{COLOR_GREEN}✅ Phase 1 Complete: All {self.total_seeder_count} seeders deployed{COLOR_RESET}")
                 
-                # Wait for all seeders to be ready
-                seeders_ready = self.wait_for_all_seeders_ready(self.handler, 
-                                                             max(10, self.config.get_timeout_minutes() // 2))
-                
-                if not seeders_ready:
-                    print(f"{COLOR_RED}💥 Phase 1 Failed: Seeders not ready in time{COLOR_RESET}")
-                    if not self.cleanup_in_progress:
-                        self._emergency_cleanup()
-                    return {}
-                
-                print(f"{COLOR_GREEN}🎉 Phase 1 Success: All seeders are ready and serving!{COLOR_RESET}")
-            else:
-                print(f"{COLOR_YELLOW}⚠ No seeders to deploy, proceeding to leechers...{COLOR_RESET}")
-            
-            # =================================================================
-            # PHASE 2: DEPLOY ALL LEECHERS 
-            # =================================================================
-            print(f"\n{COLOR_BOLD}{COLOR_BLUE}=== Phase 2: Deploying All Leechers ==={COLOR_RESET}")
-            print(f"📥 Deploying {self.total_leecher_count} leechers across {len(self.config.get_regions())} regions...")
-            print(f"🌱 Leechers will connect to {self.total_seeder_count} ready seeders")
-            
-            leecher_futures = []
-            with ThreadPoolExecutor() as executor:
-                for region in self.config.get_regions():
-                    if region['leechers'] > 0:  # Only deploy if there are leechers
-                        ami_id = region_ami_map[region['name']]
-                        leecher_futures.append(
-                            executor.submit(
-                                self.deploy_leechers_only,
-                                region,
-                                torrent_url,
-                                seed_fileurl,
-                                ami_id
-                            )
-                        )
-                
-                # Collect leecher instance IDs
-                for future in leecher_futures:
-                    if self.cleanup_in_progress:
-                        break
-                    region_name, leecher_instance_ids = future.result()
-                    if region_name not in self.region_instances:
-                        self.region_instances[region_name] = []
-                    self.region_instances[region_name].extend(leecher_instance_ids)
-                    if leecher_instance_ids:
-                        print(f"{COLOR_BLUE}✓ Launched {len(leecher_instance_ids)} leechers in {region_name}{COLOR_RESET}")
-            
-            if self.cleanup_in_progress:
-                return {}
-            
-            if self.total_leecher_count > 0:
-                print(f"{COLOR_BLUE}✅ Phase 2 Complete: All {self.total_leecher_count} leechers deployed{COLOR_RESET}")
-            else:
-                print(f"{COLOR_YELLOW}⚠ No leechers to deploy{COLOR_RESET}")
-            
-            print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 Both phases complete! Total: {self.total_instance_count} instances running{COLOR_RESET}")
+            print(f"{COLOR_GREEN}✅ Deployed {self.total_instance_count} instances across {len(self.config.get_regions())} regions{COLOR_RESET}")
             
             # Wait for completion
             print(f"\n{COLOR_BOLD}=== Live Status Dashboard ==={COLOR_RESET}")
-            print("🌱 Seeders are ready and serving")
-            print("📥 Leechers are now downloading from established seeders")  
+            print("🚀 Each instance runs BitTorrent immediately after setup")
             print("📊 CSV files will be automatically collected after BitTorrent completion")
-            print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes for all to complete...")
+            print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes...")
             print(f"📁 Logs being saved to: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             print(f"📊 CSV files being saved to: {COLOR_CYAN}{LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C anytime to stop and cleanup{COLOR_RESET}")
@@ -1356,9 +1220,7 @@ class BitTorrentDeployer:
             self.log_server.stop()
             print(f"{COLOR_GREEN}✓ Log server stopped{COLOR_RESET}")
             
-            print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 Two-Phase BitTorrent Network Test Completed!{COLOR_RESET}")
-            print(f"{COLOR_GREEN}🌱 Phase 1: {self.total_seeder_count} seeders deployed and ready{COLOR_RESET}")
-            print(f"{COLOR_BLUE}📥 Phase 2: {self.total_leecher_count} leechers deployed after seeders ready{COLOR_RESET}")
+            print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 Enhanced BitTorrent network test completed!{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 All logs saved in: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             if total_csv_files > 0:
                 print(f"{COLOR_BOLD}{COLOR_CYAN}📊 {total_csv_files} CSV files saved in: {LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
