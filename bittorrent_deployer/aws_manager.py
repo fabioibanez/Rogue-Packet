@@ -4,14 +4,12 @@ AWS Management for BitTorrent Network Deployment
 
 import boto3
 import base64
+import os
 from .constants import (
     EC2_SERVICE_NAME, DEFAULT_INSTANCE_TYPE, UBUNTU_OWNER_ID,
     UBUNTU_AMI_NAME_PATTERN, AMI_ARCHITECTURE, AMI_STATE_AVAILABLE,
-    UPDATE_CMD, INSTALL_PACKAGES_CMD, INSTALL_DEPS_CMD, SHUTDOWN_CMD,
     TORRENT_TEMP_DIR, SEED_TEMP_DIR, BITTORRENT_PROJECT_DIR,
-    LOG_FILE_PATH, TORRENT_FILENAME, SEED_FILENAME,
-    LOGS_ENDPOINT, STREAM_ENDPOINT, COMPLETION_ENDPOINT,
-    ROLE_SEEDER, ROLE_LEECHER, STATUS_COMPLETE
+    LOG_FILE_PATH, TORRENT_FILENAME, SEED_FILENAME
 )
 
 
@@ -125,7 +123,7 @@ class AWSManager:
     def generate_user_data(self, github_repo, torrent_url, seed_fileurl, role, 
                           controller_ip, controller_port, instance_id):
         """
-        Generate user data script for EC2 instance
+        Generate user data script for EC2 instance by loading external bash script
         
         Args:
             github_repo (str): GitHub repository URL
@@ -139,182 +137,48 @@ class AWSManager:
         Returns:
             str: Base64 encoded user data script
         """
-        script = f"""#!/bin/bash
-# Debug: Log all commands and outputs
-set -x
-exec > >(tee -a /tmp/startup.log) 2>&1
-
-# Function to update VM state locally and notify controller
-update_vm_state() {{
-    local state="$1"
-    echo "$state" > /tmp/vm_state.txt
-    curl -s -X POST -H "Content-Type: application/json" \\
-        -d '{{"instance_id": "{instance_id}", "state": "'"$state"'", "timestamp": '$(date +%s)'}}' \\
-        http://{controller_ip}:{controller_port}/state > /dev/null 2>&1 || true
-}}
-
-# Function to send log chunks to controller
-send_log_chunk() {{
-    local phase="$1"
-    local log_file="$2"
-    curl -s -X POST -H "Content-Type: application/json" \\
-        -d '{{"instance_id": "{instance_id}", "phase": "'"$phase"'", "log_chunk": "'"$(cat $log_file | tail -n 20 | sed 's/"/\\"/g')"'", "timestamp": '$(date +%s)'}}' \\
-        http://{controller_ip}:{controller_port}{STREAM_ENDPOINT} > /dev/null 2>&1 || true
-}}
-
-# Function to send final logs on exit
-send_final_logs() {{
-    echo "=== Sending final logs to controller ==="
-    update_vm_state "error"
-    
-    # Send startup logs if they exist
-    if [ -f /tmp/startup.log ]; then
-        curl -X POST -F "instance_id={instance_id}" -F "phase=startup" -F "logfile=@/tmp/startup.log" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
-    fi
-    
-    # Send core-run logs if they exist
-    if [ -f {LOG_FILE_PATH} ]; then
-        curl -X POST -F "instance_id={instance_id}" -F "phase=core-run" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
-    fi
-    
-    curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "interrupted"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT} || true
-}}
-
-# Set up trap to send logs on any exit
-trap 'send_final_logs' EXIT TERM INT
-
-# Function to stream logs periodically
-start_log_streaming() {{
-    # Stream startup logs every 10 seconds
-    {{
-        while [ -f /tmp/startup.log ] && [ "$(cat /tmp/vm_state.txt 2>/dev/null)" = "startup" ]; do
-            send_log_chunk "startup" "/tmp/startup.log"
-            sleep 10
-        done
         
-        # Stream core-run logs every 10 seconds  
-        while [ -f {LOG_FILE_PATH} ] && [ "$(cat /tmp/vm_state.txt 2>/dev/null)" = "core-run" ]; do
-            send_log_chunk "core-run" "{LOG_FILE_PATH}"
-            sleep 10
-        done
-    }} &
-}}
-
-echo "=== Starting instance setup for {instance_id} ==="
-update_vm_state "startup"
-
-echo "Role: {role}"
-echo "Torrent URL: {torrent_url}"
-echo "Controller: {controller_ip}:{controller_port}"
-echo "Timestamp: $(date)"
-
-echo "=== System Update ==="
-{UPDATE_CMD}
-echo "System update completed with exit code: $?"
-
-echo "=== Installing System Packages ==="
-{INSTALL_PACKAGES_CMD}
-echo "System packages installed with exit code: $?"
-
-echo "=== Python and pip versions ==="
-python3 --version
-pip3 --version
-
-echo "=== Cloning Repository ==="
-git clone -b feat/distribed {github_repo} {BITTORRENT_PROJECT_DIR}
-echo "Git clone completed with exit code: $?"
-
-cd {BITTORRENT_PROJECT_DIR}
-echo "Current directory: $(pwd)"
-echo "Directory contents:"
-ls -la
-
-echo "=== Installing Python Dependencies ==="
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt --verbose --timeout 300
-PIP_EXIT_CODE=$?
-echo "pip install completed with exit code: $PIP_EXIT_CODE"
-
-if [ $PIP_EXIT_CODE -ne 0 ]; then
-    echo "ERROR: pip install failed!"
-    update_vm_state "error"
-    exit 1
-fi
-
-# Create necessary directories
-mkdir -p {TORRENT_TEMP_DIR}
-mkdir -p {SEED_TEMP_DIR}
-
-echo "=== Downloading torrent file ==="
-curl -L -o {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} {torrent_url}
-CURL_EXIT_CODE=$?
-echo "curl completed with exit code: $CURL_EXIT_CODE"
-
-# Role-specific setup
-if [ "{role}" == "{ROLE_SEEDER}" ]; then
-    echo "=== Seeder Setup: Downloading actual file ==="
-    curl -L -o {SEED_TEMP_DIR}/{SEED_FILENAME} {seed_fileurl}
-    SEED_CURL_EXIT_CODE=$?
-    echo "Seed file download completed with exit code: $SEED_CURL_EXIT_CODE"
-    
-    if [ $SEED_CURL_EXIT_CODE -ne 0 ]; then
-        echo "ERROR: Failed to download seed file!"
-        update_vm_state "error"
-        exit 1
-    fi
-else
-    echo "=== Leecher Setup: No seed file needed ==="
-fi
-
-export BITTORRENT_ROLE="{role}"
-export INSTANCE_ID="{instance_id}"
-echo "{instance_id}" > /tmp/instance_id.txt
-
-# Start log streaming in background
-start_log_streaming
-
-echo "=== Startup Complete - Starting BitTorrent Core ==="
-# Send final startup logs
-send_log_chunk "startup" "/tmp/startup.log"
-
-# Transition to core-run phase
-update_vm_state "core-run"
-
-if [ "{role}" == "{ROLE_SEEDER}" ]; then
-    echo "Starting BitTorrent client as SEEDER"
-    echo "Command: python3 -m main -s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
-    python3 -m main -s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
-else
-    echo "Starting BitTorrent client as LEECHER"
-    echo "Command: python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
-    python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
-fi
-
-BITTORRENT_EXIT_CODE=$?
-echo "BitTorrent client completed with exit code: $BITTORRENT_EXIT_CODE"
-
-echo "=== BitTorrent client finished ==="
-update_vm_state "completed"
-
-# Stop log streaming
-pkill -f "send_log_chunk" 2>/dev/null || true
-
-echo "=== Sending final logs to controller ==="
-# Send final startup logs
-curl -X POST -F "instance_id={instance_id}" -F "phase=startup" -F "logfile=@/tmp/startup.log" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
-
-# Send final core-run logs  
-curl -X POST -F "instance_id={instance_id}" -F "phase=core-run" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
-
-curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "{STATUS_COMPLETE}"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT}
-
-echo "=== Instance setup completed ==="
-
-# Remove the trap since we're exiting normally
-trap - EXIT TERM INT
-
-{SHUTDOWN_CMD}
-"""
+        # Get the directory where this Python file is located
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        script_path = os.path.join(script_dir, 'ec2_user_data.sh')
+        
+        # Load the bash script template
+        try:
+            with open(script_path, 'r') as f:
+                script_template = f.read()
+        except FileNotFoundError:
+            raise Exception(f"Could not find ec2_user_data.sh at {script_path}. Make sure the file exists.")
+        
+        # Define template substitutions
+        substitutions = {
+            'INSTANCE_ID': instance_id,
+            'CONTROLLER_IP': controller_ip,
+            'CONTROLLER_PORT': str(controller_port),
+            'ROLE': role,
+            'TORRENT_URL': torrent_url,
+            'SEED_FILEURL': seed_fileurl,
+            'GITHUB_REPO': github_repo,
+            'LOG_FILE_PATH': LOG_FILE_PATH,
+            'TORRENT_TEMP_DIR': TORRENT_TEMP_DIR,
+            'SEED_TEMP_DIR': SEED_TEMP_DIR,
+            'BITTORRENT_PROJECT_DIR': BITTORRENT_PROJECT_DIR,
+            'TORRENT_FILENAME': TORRENT_FILENAME,
+            'SEED_FILENAME': SEED_FILENAME
+        }
+        
+        # Perform template substitution
+        script = script_template
+        for key, value in substitutions.items():
+            placeholder = f'{{{{{key}}}}}'  # Creates {{KEY}} pattern
+            script = script.replace(placeholder, value)
+        
+        # Debug: Print first few lines to verify substitution worked
+        print(f"Generated user data script preview for {instance_id}:")
+        lines = script.split('\n')[:10]  # First 10 lines
+        for i, line in enumerate(lines, 1):
+            print(f"  {i:2d}: {line}")
+        print(f"  ... (script continues for {len(script.split())} total lines)")
+        
         return base64.b64encode(script.encode()).decode()
     
     def launch_instance(self, region, user_data, ami_id):
