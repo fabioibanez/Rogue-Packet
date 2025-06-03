@@ -33,32 +33,29 @@ send_log_chunk() {
     ) 2>/dev/null
 }
 
-# Function to stream logs periodically (completely isolated from debug logging)
+# Function to stream logs periodically (completely sequential, no overlap)
 start_log_streaming() {
-    ( # Run entire streaming in isolated subshell
+    local phase="$1"
+    local log_file="$2"
+    
+    echo "Starting log streaming for phase: $phase, file: $log_file"
+    
+    ( # Run in isolated subshell
         set +x  # Disable all debug logging for streaming
         exec 2>/dev/null  # Suppress any stderr from streaming
         
-        # Stream startup logs every 15 seconds while in startup phase
-        while [ -f /tmp/startup.log ] && [ "$(cat /tmp/vm_state.txt 2>/dev/null || echo unknown)" = "startup" ]; do
-            send_log_chunk "startup" "/tmp/startup.log"
+        # Stream logs every 15 seconds while in the specified phase
+        while [ "$(cat /tmp/vm_state.txt 2>/dev/null || echo unknown)" = "$phase" ]; do
+            if [ -f "$log_file" ]; then
+                send_log_chunk "$phase" "$log_file"
+            fi
             sleep 15
-        done &
+        done
         
-        # Stream core-run logs every 15 seconds while in core-run phase  
-        while [ "$(cat /tmp/vm_state.txt 2>/dev/null || echo unknown)" = "core-run" ] || [ -f {{LOG_FILE_PATH}} ]; do
-            if [ -f {{LOG_FILE_PATH}} ]; then
-                send_log_chunk "core-run" "{{LOG_FILE_PATH}}"
-            fi
-            sleep 15
-            # Break if we're no longer in core-run and file hasn't been updated recently
-            if [ "$(cat /tmp/vm_state.txt 2>/dev/null || echo unknown)" != "core-run" ] && [ -f {{LOG_FILE_PATH}} ]; then
-                if [ $(( $(date +%s) - $(stat -c %Y {{LOG_FILE_PATH}} 2>/dev/null || echo 0) )) -gt 30 ]; then
-                    break
-                fi
-            fi
-        done &
-    ) &  # Background the entire isolated streaming process
+        echo "Log streaming stopped for phase: $phase"
+    ) &  # Background the streaming process
+    
+    echo "Started background log streaming for $phase (PID: $!)"
 }
 
 # Function to send final logs on exit (isolated from debug logging)
@@ -67,6 +64,10 @@ send_final_logs() {
         set +x  # Disable debug logging
         echo "=== Sending final logs to controller ==="
         update_vm_state "error"
+        
+        # Stop any running log streaming
+        pkill -f "send_log_chunk" 2>/dev/null || true
+        sleep 1
         
         # Send startup logs if they exist
         if [ -f /tmp/startup.log ]; then
@@ -155,34 +156,85 @@ export BITTORRENT_ROLE="{{ROLE}}"
 export INSTANCE_ID="{{INSTANCE_ID}}"
 echo "{{INSTANCE_ID}}" > /tmp/instance_id.txt
 
-# Start log streaming in background
-start_log_streaming
+# Start STARTUP phase log streaming only
+echo "=== Starting STARTUP phase log streaming ==="
+start_log_streaming "startup" "/tmp/startup.log"
 
-echo "=== Startup Complete - Starting BitTorrent Core ==="
+echo "=== Startup Complete - Transitioning to BitTorrent Core ==="
+echo "==============================================="
+echo "STARTUP PHASE COMPLETE - NO MORE STARTUP LOGS"
+echo "==============================================="
+
 # Send final startup logs
 send_log_chunk "startup" "/tmp/startup.log"
+
+# IMPORTANT: Stop all startup log streaming before moving to core-run
+echo "=== Stopping startup log streaming ==="
+pkill -f "send_log_chunk.*startup" 2>/dev/null || true
+sleep 3  # Give time for processes to stop and final logs to be sent
+
+# Ensure startup phase is completely finished
+sync  # Force any pending writes to disk
 
 # Transition to core-run phase
 update_vm_state "core-run"
 
+echo "============================================="
+echo "CORE-RUN PHASE STARTING - BITTORRENT LOGS ONLY"
+echo "============================================="
+
+# Start CORE-RUN phase log streaming only
+echo "=== Starting CORE-RUN phase log streaming ==="  
+start_log_streaming "core-run" "{{LOG_FILE_PATH}}"
+
 if [ "{{ROLE}}" == "seeder" ]; then
-    echo "Starting BitTorrent client as SEEDER"
+    echo "============================================="
+    echo "STARTING BITTORRENT CLIENT AS SEEDER"
     echo "Command: python3 -m main -s {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}}"
-    python3 -m main -s {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}} > {{LOG_FILE_PATH}} 2>&1
+    echo "============================================="
+    
+    # Add clear marker to BitTorrent log file
+    echo "========================================" > {{LOG_FILE_PATH}}
+    echo "BITTORRENT CLIENT STARTING AS SEEDER" >> {{LOG_FILE_PATH}}
+    echo "Timestamp: $(date)" >> {{LOG_FILE_PATH}}
+    echo "========================================" >> {{LOG_FILE_PATH}}
+    
+    python3 -m main -s {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}} >> {{LOG_FILE_PATH}} 2>&1
 else
-    echo "Starting BitTorrent client as LEECHER"
+    echo "============================================="
+    echo "STARTING BITTORRENT CLIENT AS LEECHER"
     echo "Command: python3 -m main {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}}"
-    python3 -m main {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}} > {{LOG_FILE_PATH}} 2>&1
+    echo "============================================="
+    
+    # Add clear marker to BitTorrent log file
+    echo "========================================" > {{LOG_FILE_PATH}}
+    echo "BITTORRENT CLIENT STARTING AS LEECHER" >> {{LOG_FILE_PATH}}
+    echo "Timestamp: $(date)" >> {{LOG_FILE_PATH}}
+    echo "========================================" >> {{LOG_FILE_PATH}}
+    
+    python3 -m main {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}} >> {{LOG_FILE_PATH}} 2>&1
 fi
 
 BITTORRENT_EXIT_CODE=$?
-echo "BitTorrent client completed with exit code: $BITTORRENT_EXIT_CODE"
+
+# Add completion marker to BitTorrent log file
+echo "========================================" >> {{LOG_FILE_PATH}}
+echo "BITTORRENT CLIENT COMPLETED" >> {{LOG_FILE_PATH}}
+echo "Exit Code: $BITTORRENT_EXIT_CODE" >> {{LOG_FILE_PATH}}
+echo "Timestamp: $(date)" >> {{LOG_FILE_PATH}}
+echo "========================================" >> {{LOG_FILE_PATH}}
+
+echo "============================================="
+echo "BITTORRENT CLIENT COMPLETED WITH EXIT CODE: $BITTORRENT_EXIT_CODE"
+echo "============================================="
 
 echo "=== BitTorrent client finished ==="
 update_vm_state "completed"
 
-# Stop log streaming
+# Stop CORE-RUN log streaming
+echo "=== Stopping ALL log streaming ==="
 pkill -f "send_log_chunk" 2>/dev/null || true
+sleep 2  # Give time for processes to stop
 
 echo "=== Sending final logs to controller ==="
 # Send final startup logs (isolated from debug logging)
