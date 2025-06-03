@@ -80,6 +80,8 @@ class Run(object):
         logging.info(f"\033[1;32mStarted saving progress for: {self.torrent_dir} to {save_path}\033[0m")
 
     def start(self):
+        time.sleep(8)
+        
         peers = self.tracker.get_peers_from_trackers()
         self.peers_manager.add_peers(peers)
         
