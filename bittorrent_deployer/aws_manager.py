@@ -1,6 +1,4 @@
-"""
-AWS Management for BitTorrent Network Deployment
-"""
+"""AWS Management for BitTorrent Network Deployment"""
 
 import boto3
 import base64
@@ -17,43 +15,19 @@ class AWSManager:
     """Manages AWS operations for BitTorrent network deployment"""
     
     def __init__(self, aws_config):
-        """
-        Initialize AWS manager with configuration
-        
-        Args:
-            aws_config (dict): AWS configuration from config file
-        """
+        """Initialize AWS manager with configuration"""
         self.aws_config = aws_config
         self.region_clients = {}
-        self.region_amis = {}  # Cache for AMI IDs per region
+        self.region_amis = {}
     
     def get_ec2_client(self, region):
-        """
-        Get or create EC2 client for specified region
-        
-        Args:
-            region (str): AWS region name
-            
-        Returns:
-            boto3.client: EC2 client for the region
-        """
+        """Get or create EC2 client for specified region"""
         if region not in self.region_clients:
-            self.region_clients[region] = boto3.client(
-                EC2_SERVICE_NAME,
-                region_name=region,
-            )
+            self.region_clients[region] = boto3.client(EC2_SERVICE_NAME, region_name=region)
         return self.region_clients[region]
     
     def get_latest_ubuntu_ami(self, region):
-        """
-        Get latest Ubuntu 22.04 AMI for the specified region
-        
-        Args:
-            region (str): AWS region name
-            
-        Returns:
-            tuple: (ami_info dict, error_message str or None)
-        """
+        """Get latest Ubuntu 22.04 AMI for the specified region"""
         if region in self.region_amis:
             return self.region_amis[region], None
         
@@ -61,7 +35,7 @@ class AWSManager:
             ec2_client = self.get_ec2_client(region)
             
             response = ec2_client.describe_images(
-                Owners=[UBUNTU_OWNER_ID],  # Canonical (Ubuntu)
+                Owners=[UBUNTU_OWNER_ID],
                 Filters=[
                     {'Name': 'name', 'Values': [UBUNTU_AMI_NAME_PATTERN]},
                     {'Name': 'state', 'Values': [AMI_STATE_AVAILABLE]},
@@ -72,12 +46,7 @@ class AWSManager:
             if not response['Images']:
                 return None, f"No Ubuntu 22.04 AMIs found in {region}"
             
-            # Sort by creation date and get the latest
-            latest_ami = sorted(
-                response['Images'], 
-                key=lambda x: x['CreationDate'], 
-                reverse=True
-            )[0]
+            latest_ami = sorted(response['Images'], key=lambda x: x['CreationDate'], reverse=True)[0]
             
             ami_info = {
                 'ami_id': latest_ami['ImageId'],
@@ -86,7 +55,6 @@ class AWSManager:
                 'description': latest_ami.get('Description', 'N/A')
             }
             
-            # Cache the result
             self.region_amis[region] = ami_info
             return ami_info, None
             
@@ -94,16 +62,7 @@ class AWSManager:
             return None, f"Failed to lookup AMI in {region}: {str(e)}"
     
     def validate_ami_availability(self, region, ami_id):
-        """
-        Validate that an AMI is available and accessible
-        
-        Args:
-            region (str): AWS region name
-            ami_id (str): AMI ID to validate
-            
-        Returns:
-            tuple: (is_valid bool, message str)
-        """
+        """Validate that an AMI is available and accessible"""
         try:
             ec2_client = self.get_ec2_client(region)
             response = ec2_client.describe_images(ImageIds=[ami_id])
@@ -122,34 +81,16 @@ class AWSManager:
     
     def generate_user_data(self, github_repo, torrent_url, seed_fileurl, role, 
                           controller_ip, controller_port, instance_id):
-        """
-        Generate user data script for EC2 instance by loading external bash script
-        
-        Args:
-            github_repo (str): GitHub repository URL
-            torrent_url (str): URL to torrent file
-            seed_fileurl (str): URL to seed file (for seeders)
-            role (str): Instance role ('seeder' or 'leecher')
-            controller_ip (str): Controller IP address
-            controller_port (int): Controller port
-            instance_id (str): Instance identifier
-            
-        Returns:
-            str: Base64 encoded user data script
-        """
-        
-        # Get the directory where this Python file is located
+        """Generate user data script for EC2 instance by loading external bash script"""
         script_dir = os.path.dirname(os.path.abspath(__file__))
         script_path = os.path.join(script_dir, 'ec2_user_data.sh')
         
-        # Load the bash script template
         try:
             with open(script_path, 'r') as f:
                 script_template = f.read()
         except FileNotFoundError:
-            raise Exception(f"Could not find ec2_user_data.sh at {script_path}. Make sure the file exists.")
+            raise Exception(f"Could not find ec2_user_data.sh at {script_path}")
         
-        # Define template substitutions
         substitutions = {
             'INSTANCE_ID': instance_id,
             'CONTROLLER_IP': controller_ip,
@@ -166,33 +107,16 @@ class AWSManager:
             'SEED_FILENAME': SEED_FILENAME
         }
         
-        # Perform template substitution
         script = script_template
         for key, value in substitutions.items():
-            placeholder = f'{{{{{key}}}}}'  # Creates {{KEY}} pattern
-            script = script.replace(placeholder, value)
+            script = script.replace(f'{{{{{key}}}}}', value)
         
-        # Debug: Print first few lines to verify substitution worked
-        print(f"Generated user data script preview for {instance_id}:")
-        lines = script.split('\n')[:10]  # First 10 lines
-        for i, line in enumerate(lines, 1):
-            print(f"  {i:2d}: {line}")
-        print(f"  ... (script continues for {len(script.split())} total lines)")
+        print(f"Generated user data script for {instance_id} ({len(script)} chars)")
         
         return base64.b64encode(script.encode()).decode()
     
     def launch_instance(self, region, user_data, ami_id):
-        """
-        Launch EC2 instance with specified configuration
-        
-        Args:
-            region (str): AWS region name
-            user_data (str): Base64 encoded user data script
-            ami_id (str): AMI ID to use
-            
-        Returns:
-            str: EC2 instance ID
-        """
+        """Launch EC2 instance with specified configuration"""
         ec2_client = self.get_ec2_client(region)
         
         response = ec2_client.run_instances(
@@ -207,13 +131,7 @@ class AWSManager:
         return response['Instances'][0]['InstanceId']
     
     def terminate_instances(self, region, instance_ids):
-        """
-        Terminate EC2 instances in specified region
-        
-        Args:
-            region (str): AWS region name
-            instance_ids (list): List of EC2 instance IDs to terminate
-        """
+        """Terminate EC2 instances in specified region"""
         if not instance_ids:
             return
         
