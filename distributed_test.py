@@ -621,7 +621,7 @@ send_log "System update completed"
 
 echo "=== Installing Packages ==="
 send_log "Installing system packages..."
-{INSTALL_PACKAGES_CMD}
+{INSTALL_PACKAGES_CMD} tree
 send_log "System packages installation completed"
 
 echo "=== Network Configuration ==="
@@ -685,6 +685,15 @@ send_log "BitTorrent environment configured - Role: {role}, Port: 6881"
 
 echo "=== Starting BitTorrent Client ==="
 send_log "Starting BitTorrent client from project directory..."
+
+echo "=== Directory Structure Verification ===" >> {LOG_FILE_PATH}
+echo "Current working directory: $(pwd)" >> {LOG_FILE_PATH}
+echo "Directory tree before BitTorrent execution:" >> {LOG_FILE_PATH}
+tree . >> {LOG_FILE_PATH} 2>&1
+echo "Torrent temp directory contents:" >> {LOG_FILE_PATH}
+ls -la {TORRENT_TEMP_DIR}/ >> {LOG_FILE_PATH} 2>&1
+echo "========================================" >> {LOG_FILE_PATH}
+
 # Start log streaming
 tail -f /tmp/startup.log | while read line; do send_log "STARTUP: $line"; sleep 0.5; done &
 
