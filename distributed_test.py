@@ -8,9 +8,9 @@ Enhanced BitTorrent Network Deployment Script with Two-Phase Deployment
 
 # Timing Constants for Coordinated Startup
 SETUP_COMPLETION_WAIT_SECONDS = 10  # Wait after all instances finish setup
-SEEDER_START_INTERVAL_SECONDS = 5   # Wait between each seeder starting
-POST_SEEDERS_WAIT_SECONDS = 10      # Wait after all seeders start before leechers
-LEECHER_START_INTERVAL_SECONDS = 3  # Wait between each leecher starting
+LEECHER_START_INTERVAL_SECONDS = 5  # Wait between each leecher starting
+POST_LEECHERS_WAIT_SECONDS = 10     # Wait after all leechers start before seeders
+# Seeders start in parallel (no interval needed)
 
 # Constants
 # File Paths and Names
@@ -360,13 +360,13 @@ class LogHandler(BaseHTTPRequestHandler):
                 self.send_response(HTTP_OK)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({{"start": True}}).encode())
+                self.wfile.write(json.dumps({"start": True}).encode())
                 self.update_instance_status(instance_id, self.STATUS_RUNNING)
             else:
                 self.send_response(HTTP_OK)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({{"start": False}}).encode())
+                self.wfile.write(json.dumps({"start": False}).encode())
         else:
             self.send_response(400)
             self.end_headers()
@@ -1045,7 +1045,7 @@ class BitTorrentDeployer:
         return False
     
     def coordinate_staggered_startup(self, handler):
-        """Coordinate staggered startup of seeders and leechers"""
+        """Coordinate staggered startup: Leechers first, then Seeders in parallel"""
         print(f"\n{COLOR_BOLD}=== Coordinated Staggered Startup ==={COLOR_RESET}")
         
         # Wait configured time after setup completion
@@ -1062,24 +1062,8 @@ class BitTorrentDeployer:
             elif 'leecher' in instance_id:
                 leecher_instances.append(instance_id)
         
-        # Start seeders with staggered timing
-        print(f"\n{COLOR_GREEN}🌱 Starting {len(seeder_instances)} seeders with {SEEDER_START_INTERVAL_SECONDS}s intervals...{COLOR_RESET}")
-        for i, seeder_id in enumerate(seeder_instances):
-            if self.cleanup_in_progress:
-                return False
-            
-            print(f"{COLOR_GREEN}🌱 Starting seeder {i+1}/{len(seeder_instances)}: {seeder_id}{COLOR_RESET}")
-            handler.start_signals[seeder_id] = time.time()
-            
-            if i < len(seeder_instances) - 1:  # Don't wait after the last one
-                time.sleep(SEEDER_START_INTERVAL_SECONDS)
-        
-        # Wait configured time after all seeders start
-        print(f"{COLOR_CYAN}⏳ Waiting {POST_SEEDERS_WAIT_SECONDS} seconds for seeders to establish...{COLOR_RESET}")
-        time.sleep(POST_SEEDERS_WAIT_SECONDS)
-        
-        # Start leechers with staggered timing
-        print(f"\n{COLOR_BLUE}📥 Starting {len(leecher_instances)} leechers with {LEECHER_START_INTERVAL_SECONDS}s intervals...{COLOR_RESET}")
+        # Start leechers first with staggered timing
+        print(f"\n{COLOR_BLUE}📥 Starting {len(leecher_instances)} leechers first with {LEECHER_START_INTERVAL_SECONDS}s intervals...{COLOR_RESET}")
         for i, leecher_id in enumerate(leecher_instances):
             if self.cleanup_in_progress:
                 return False
@@ -1090,7 +1074,20 @@ class BitTorrentDeployer:
             if i < len(leecher_instances) - 1:  # Don't wait after the last one
                 time.sleep(LEECHER_START_INTERVAL_SECONDS)
         
-        print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 Staggered startup complete! All instances signaled to start.{COLOR_RESET}")
+        # Wait configured time after all leechers start
+        print(f"{COLOR_CYAN}⏳ Waiting {POST_LEECHERS_WAIT_SECONDS} seconds for leechers to establish...{COLOR_RESET}")
+        time.sleep(POST_LEECHERS_WAIT_SECONDS)
+        
+        # Start all seeders in parallel (no intervals)
+        print(f"\n{COLOR_GREEN}🌱 Starting all {len(seeder_instances)} seeders in parallel...{COLOR_RESET}")
+        for seeder_id in seeder_instances:
+            if self.cleanup_in_progress:
+                return False
+            
+            print(f"{COLOR_GREEN}🌱 Starting seeder: {seeder_id}{COLOR_RESET}")
+            handler.start_signals[seeder_id] = time.time()
+        
+        print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 Staggered startup complete! Leechers started first, then seeders in parallel.{COLOR_RESET}")
         return True
     
     def wait_for_completion(self, handler, timeout_minutes):
@@ -1113,8 +1110,9 @@ class BitTorrentDeployer:
             print(f"{COLOR_BOLD}{COLOR_BLUE}💾 Logs Directory: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_CYAN}📊 CSV Files Directory: {LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C at any time for graceful cleanup{COLOR_RESET}")
-            print(f"{COLOR_GREEN}🌱 Phase 1: Deploy seeders first and wait for them to be ready{COLOR_RESET}")
-            print(f"{COLOR_BLUE}📥 Phase 2: Deploy leechers after seeders are serving{COLOR_RESET}")
+            print(f"{COLOR_CYAN}⚙️  Phase 1: All instances complete setup in parallel{COLOR_RESET}")
+            print(f"{COLOR_BLUE}📥 Phase 2: Start leechers first with staggered timing{COLOR_RESET}")
+            print(f"{COLOR_GREEN}🌱 Phase 3: Start seeders in parallel after leechers{COLOR_RESET}")
             
             # Look up AMIs
             region_ami_map, ami_error = self._lookup_and_validate_amis()
@@ -1146,9 +1144,9 @@ class BitTorrentDeployer:
             print(f"📊 Total: {COLOR_GREEN}{self.total_seeder_count} seeders{COLOR_RESET}, {COLOR_BLUE}{self.total_leecher_count} leechers{COLOR_RESET} = {COLOR_BOLD}{self.total_instance_count} instances{COLOR_RESET}")
             print(f"{COLOR_YELLOW}🔄 Coordinated startup timing:{COLOR_RESET}")
             print(f"  • Setup completion wait: {SETUP_COMPLETION_WAIT_SECONDS}s")
-            print(f"  • Seeder start interval: {SEEDER_START_INTERVAL_SECONDS}s")
-            print(f"  • Post-seeders wait: {POST_SEEDERS_WAIT_SECONDS}s")
-            print(f"  • Leecher start interval: {LEECHER_START_INTERVAL_SECONDS}s")
+            print(f"  • Leecher start interval: {LEECHER_START_INTERVAL_SECONDS}s (leechers start first)")
+            print(f"  • Post-leechers wait: {POST_LEECHERS_WAIT_SECONDS}s")
+            print(f"  • Seeders: All start in parallel (after leechers)")
             
             # =================================================================
             # DEPLOY ALL INSTANCES (SETUP ONLY)
@@ -1211,8 +1209,8 @@ class BitTorrentDeployer:
             # Wait for completion
             print(f"\n{COLOR_BOLD}=== Live Status Dashboard ==={COLOR_RESET}")
             print("⚙️  All instances completed setup and received coordinated start signals")
-            print("🌱 Seeders started with staggered timing")
-            print("📥 Leechers started after seeders were established")  
+            print("📥 Leechers started first with staggered timing")
+            print("🌱 Seeders started in parallel after leechers were established")  
             print("📊 CSV files will be automatically collected after BitTorrent completion")
             print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes for all to complete...")
             print(f"📁 Logs being saved to: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
@@ -1290,9 +1288,10 @@ class BitTorrentDeployer:
             self.log_server.stop()
             print(f"{COLOR_GREEN}✓ Log server stopped{COLOR_RESET}")
             
-            print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 Two-Phase BitTorrent Network Test Completed!{COLOR_RESET}")
-            print(f"{COLOR_GREEN}🌱 Phase 1: {self.total_seeder_count} seeders deployed and ready{COLOR_RESET}")
-            print(f"{COLOR_BLUE}📥 Phase 2: {self.total_leecher_count} leechers deployed after seeders ready{COLOR_RESET}")
+            print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 Coordinated BitTorrent Network Test Completed!{COLOR_RESET}")
+            print(f"{COLOR_CYAN}⚙️  All instances completed setup in parallel{COLOR_RESET}")
+            print(f"{COLOR_BLUE}📥 {self.total_leecher_count} leechers started first with {LEECHER_START_INTERVAL_SECONDS}s intervals{COLOR_RESET}")
+            print(f"{COLOR_GREEN}🌱 {self.total_seeder_count} seeders started in parallel after leechers{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 All logs saved in: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             if total_csv_files > 0:
                 print(f"{COLOR_BOLD}{COLOR_CYAN}📊 {total_csv_files} CSV files saved in: {LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
