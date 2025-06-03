@@ -73,11 +73,6 @@ COLOR_BLUE = '\033[94m'
 COLOR_MAGENTA = '\033[95m'
 COLOR_CYAN = '\033[96m'
 
-# File Paths and Names
-DEFAULT_CONFIG_PATH = "config.yaml"
-DEFAULT_CONFIG_PATH = os.environ.get('CPATH', DEFAULT_CONFIG_PATH)
-print(f"{COLOR_GREEN}Using config path: {DEFAULT_CONFIG_PATH}{COLOR_RESET}")
-
 # Random words for run naming
 RUN_WORDS = [
     'alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel',
@@ -101,6 +96,11 @@ import sys
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor
+
+# File Paths and Names
+DEFAULT_CONFIG_PATH = "config.yaml"
+DEFAULT_CONFIG_PATH = os.environ.get('CPATH', DEFAULT_CONFIG_PATH)
+print(f"{COLOR_GREEN}Using config path: {DEFAULT_CONFIG_PATH}{COLOR_RESET}")
 
 class Config:
     def __init__(self, config_path=DEFAULT_CONFIG_PATH):
