@@ -1,119 +1,230 @@
 #!/bin/bash
-exec > >(tee -a /tmp/startup.log) 2>&1
 
+# Simple logging setup - all output goes to local files
+STARTUP_LOG="/tmp/startup.log"
+CORE_LOG="/tmp/bittorrent.log"
+LOG_SERVER_PORT=8081
+
+# Redirect all output to startup log initially
+exec > >(tee -a $STARTUP_LOG) 2>&1
+
+echo "=== Instance {{INSTANCE_ID}} | Role: {{ROLE}} started at $(date) ==="
+
+# Simple state update function
 update_vm_state() {
-  (set +x
   echo "$1" > /tmp/vm_state.txt
   curl -s -X POST -H "Content-Type: application/json" \
     -d '{"instance_id": "{{INSTANCE_ID}}", "state": "'"$1"'", "timestamp": '$(date +%s)'}' \
-    http://{{CONTROLLER_IP}}:{{CONTROLLER_PORT}}/state >/dev/null 2>&1 || true) 2>/dev/null
+    http://{{CONTROLLER_IP}}:{{CONTROLLER_PORT}}/state >/dev/null 2>&1 || true
 }
 
-send_log_chunk() {
-  [ -s "$2" ] || { echo "Log $2 not found or empty"; return; }
-  local log_content=$(tail -n 50 "$2" | sed 's/"/\\"/g' | tr '\n' '\\n')
-  curl -s -X POST -H "Content-Type: application/json" \
-    -d "{\"instance_id\": \"{{INSTANCE_ID}}\", \"phase\": \"$1\", \"log_chunk\": \"$log_content\", \"timestamp\": $(date +%s)}" \
-    http://{{CONTROLLER_IP}}:{{CONTROLLER_PORT}}/stream >/dev/null 2>&1 || true
-  echo "Sent $1 log chunk ($(wc -l < "$2") lines)"
+# Start simple HTTP server for log serving
+start_log_server() {
+  echo "Starting log server on port $LOG_SERVER_PORT..."
+  
+  python3 -c "
+import http.server
+import socketserver
+import os
+
+class LogHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/logs/startup':
+            self.serve_log('/tmp/startup.log')
+        elif self.path == '/logs/core-run':
+            self.serve_log('/tmp/bittorrent.log')
+        elif self.path == '/logs/all':
+            self.serve_combined_logs()
+        elif self.path == '/health':
+            self.serve_health()
+        else:
+            self.send_error(404, 'Endpoint not found')
+    
+    def serve_log(self, log_file):
+        try:
+            if os.path.exists(log_file):
+                with open(log_file, 'r') as f:
+                    content = f.read()
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'text/plain')
+                self.send_header('Content-Length', str(len(content)))
+                self.end_headers()
+                self.wfile.write(content.encode())
+            else:
+                self.send_error(404, 'Log file not found')
+        except Exception as e:
+            self.send_error(500, f'Error reading log: {str(e)}')
+    
+    def serve_combined_logs(self):
+        try:
+            logs = []
+            for log_file, name in [('/tmp/startup.log', 'STARTUP'), ('/tmp/bittorrent.log', 'CORE-RUN')]:
+                if os.path.exists(log_file):
+                    with open(log_file, 'r') as f:
+                        logs.append(f'=== {name} LOG ===')
+                        logs.append(f.read())
+                        logs.append('')
+            
+            content = '\n'.join(logs)
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(content.encode())
+        except Exception as e:
+            self.send_error(500, f'Error combining logs: {str(e)}')
+    
+    def serve_health(self):
+        try:
+            import json
+            status = {
+                'instance_id': '{{INSTANCE_ID}}',
+                'role': '{{ROLE}}',
+                'state': open('/tmp/vm_state.txt', 'r').read().strip() if os.path.exists('/tmp/vm_state.txt') else 'unknown',
+                'uptime': open('/proc/uptime', 'r').read().split()[0]
+            }
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(status).encode())
+        except Exception as e:
+            self.send_error(500, f'Error getting health: {str(e)}')
+
+with socketserver.TCPServer(('0.0.0.0', $LOG_SERVER_PORT), LogHandler) as httpd:
+    httpd.serve_forever()
+" &
+  
+  LOG_SERVER_PID=$!
+  echo "Log server started with PID: $LOG_SERVER_PID"
 }
 
-start_log_streaming() {
-  echo "=== Log streaming for $1 ==="
-  (
-    while [ "$(cat /tmp/vm_state.txt 2>/dev/null || echo unknown)" = "$1" ]; do
-      [ -f "$2" ] && send_log_chunk "$1" "$2"
-      sleep 10
-    done
-  ) &
-}
-
-send_final_logs() {
-  (set +x
+# Cleanup function
+cleanup() {
+  echo "=== Cleanup initiated ==="
   update_vm_state "error"
-  pkill -f "send_log_chunk" 2>/dev/null || true
-  sleep 1
-  for phase in startup core-run; do
-    file="/tmp/startup.log"
-    [ "$phase" = "core-run" ] && file="{{LOG_FILE_PATH}}"
-    [ -f "$file" ] && curl -s -X POST -F "instance_id={{INSTANCE_ID}}" -F "phase=$phase" -F "logfile=@$file" \
-      http://{{CONTROLLER_IP}}:{{CONTROLLER_PORT}}/logs || true
-  done
-  curl -s -X POST -H "Content-Type: application/json" -d '{"instance_id": "{{INSTANCE_ID}}", "status": "interrupted"}' \
-    http://{{CONTROLLER_IP}}:{{CONTROLLER_PORT}}/completion || true) 2>/dev/null
+  
+  # Kill log server
+  if [ ! -z "$LOG_SERVER_PID" ]; then
+    kill $LOG_SERVER_PID 2>/dev/null || true
+  fi
+  
+  # Send completion status
+  curl -s -X POST -H "Content-Type: application/json" \
+    -d '{"instance_id": "{{INSTANCE_ID}}", "status": "interrupted"}' \
+    http://{{CONTROLLER_IP}}:{{CONTROLLER_PORT}}/completion || true
 }
-trap 'send_final_logs' EXIT TERM INT
 
-echo "=== Instance {{INSTANCE_ID}} | Role: {{ROLE}} | Controller: {{CONTROLLER_IP}}:{{CONTROLLER_PORT}} ==="
+trap 'cleanup' EXIT TERM INT
+
+# Update state and start log server
 update_vm_state "startup"
+start_log_server
 
-echo "=== STARTUP LOG TEST ENTRIES ==="
-echo "Instance {{INSTANCE_ID}} started at $(date)"
-send_log_chunk "startup" "/tmp/startup.log"
+echo "=== STARTUP PHASE ==="
 
-apt-get update && echo "System update completed"
-apt-get install -y git python3 python3-pip python3-dev python3-venv build-essential libssl-dev libffi-dev
+# System updates
+echo "Updating system packages..."
+apt-get update || { echo "Failed to update packages"; exit 1; }
 
-python3 --version && pip3 --version
-git clone -b feat/distribed {{GITHUB_REPO}} {{BITTORRENT_PROJECT_DIR}} && cd {{BITTORRENT_PROJECT_DIR}}
+echo "Installing required packages..."
+apt-get install -y git python3 python3-pip python3-dev python3-venv build-essential libssl-dev libffi-dev || {
+  echo "Failed to install packages"
+  exit 1
+}
 
+echo "Checking Python installation..."
+python3 --version
+pip3 --version
+
+# Clone repository
+echo "Cloning repository..."
+git clone -b feat/distribed {{GITHUB_REPO}} {{BITTORRENT_PROJECT_DIR}} || {
+  echo "Failed to clone repository"
+  exit 1
+}
+
+cd {{BITTORRENT_PROJECT_DIR}}
+
+# Install Python dependencies
+echo "Installing Python dependencies..."
 python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt --timeout 300 --verbose || { update_vm_state "error"; exit 1; }
+python3 -m pip install -r requirements.txt --timeout 300 --verbose || {
+  echo "Failed to install Python dependencies"
+  exit 1
+}
 
+# Download files
+echo "Creating directories and downloading files..."
 mkdir -p {{TORRENT_TEMP_DIR}} {{SEED_TEMP_DIR}}
-curl -L -o {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}} {{TORRENT_URL}}
+
+echo "Downloading torrent file..."
+curl -L -o {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}} {{TORRENT_URL}} || {
+  echo "Failed to download torrent file"
+  exit 1
+}
 
 if [ "{{ROLE}}" = "seeder" ]; then
-  curl -L -o {{SEED_TEMP_DIR}}/{{SEED_FILENAME}} {{SEED_FILEURL}} || { update_vm_state "error"; exit 1; }
+  echo "Downloading seed file..."
+  curl -L -o {{SEED_TEMP_DIR}}/{{SEED_FILENAME}} {{SEED_FILEURL}} || {
+    echo "Failed to download seed file"
+    exit 1
+  }
 fi
 
-export BITTORRENT_ROLE="{{ROLE}}" INSTANCE_ID="{{INSTANCE_ID}}"
+# Environment setup
+export BITTORRENT_ROLE="{{ROLE}}"
+export INSTANCE_ID="{{INSTANCE_ID}}"
 echo "{{INSTANCE_ID}}" > /tmp/instance_id.txt
 
-start_log_streaming "startup" "/tmp/startup.log"
-sleep 2
-send_log_chunk "startup" "/tmp/startup.log"
-pkill -f "send_log_chunk.*startup" 2>/dev/null || true
-sync && update_vm_state "core-run"
+echo "=== STARTUP COMPLETED, BEGINNING CORE RUN ==="
+sync
+update_vm_state "core-run"
 
-mkdir -p $(dirname {{LOG_FILE_PATH}})
-{
-  echo "========================================"
-  echo "BITTORRENT LOG STARTED"
-  echo "Instance: {{INSTANCE_ID}} | Role: {{ROLE}} | $(date)"
-  echo "========================================"
-} > {{LOG_FILE_PATH}}
+# Switch logging to core run file
+exec > >(tee -a $CORE_LOG) 2>&1
 
-start_log_streaming "core-run" "{{LOG_FILE_PATH}}"
-sleep 2
+echo "========================================"
+echo "BITTORRENT CORE LOG STARTED"
+echo "Instance: {{INSTANCE_ID}} | Role: {{ROLE}} | $(date)"
+echo "========================================"
 
+# Build BitTorrent command
 CMD="python3 -m main"
-[ "{{ROLE}}" = "seeder" ] && CMD+=" -s"
-CMD+=" {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}}"
-echo "Starting BitTorrent client: $CMD" >> {{LOG_FILE_PATH}}
-eval "$CMD" >> {{LOG_FILE_PATH}} 2>&1
+if [ "{{ROLE}}" = "seeder" ]; then
+  CMD="$CMD -s"
+fi
+CMD="$CMD {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}}"
+
+echo "Starting BitTorrent client with command: $CMD"
+echo "Working directory: $(pwd)"
+echo "Environment variables:"
+echo "  BITTORRENT_ROLE=$BITTORRENT_ROLE"
+echo "  INSTANCE_ID=$INSTANCE_ID"
+
+# Run the BitTorrent client
+eval "$CMD"
 EXIT_CODE=$?
 
-{
-  echo "========================================"
-  echo "BITTORRENT CLIENT COMPLETED | Exit Code: $EXIT_CODE | $(date)"
-  echo "========================================"
-} >> {{LOG_FILE_PATH}}
+echo "========================================"
+echo "BITTORRENT CLIENT COMPLETED"
+echo "Exit Code: $EXIT_CODE"
+echo "Completed at: $(date)"
+echo "========================================"
 
+# Update final state
 update_vm_state "completed"
-pkill -f "send_log_chunk" 2>/dev/null || true
-sleep 2
 
-for phase in startup core-run; do
-  file="/tmp/startup.log"
-  [ "$phase" = "core-run" ] && file="{{LOG_FILE_PATH}}"
-  [ -f "$file" ] && curl -s -X POST -F "instance_id={{INSTANCE_ID}}" -F "phase=$phase" -F "logfile=@$file" \
-    http://{{CONTROLLER_IP}}:{{CONTROLLER_PORT}}/logs 2>/dev/null || true
-done
-
+# Send completion notification
 curl -s -X POST -H "Content-Type: application/json" \
   -d '{"instance_id": "{{INSTANCE_ID}}", "status": "complete"}' \
-  http://{{CONTROLLER_IP}}:{{CONTROLLER_PORT}}/completion 2>/dev/null || true
+  http://{{CONTROLLER_IP}}:{{CONTROLLER_PORT}}/completion || true
 
+echo "Keeping log server running for 60 seconds to allow final log collection..."
+sleep 60
+
+# Clean shutdown
+echo "Shutting down instance..."
 trap - EXIT TERM INT
 shutdown -h now
