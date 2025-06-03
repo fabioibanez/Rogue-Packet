@@ -50,6 +50,7 @@ class Tracker(object):
 
         for _, tracker in enumerate(self.torrent.announce_list):
             if len(self.sock_addrs) >= MAX_PEERS_TRY_CONNECT:
+                logging.info("Reached maximum number of peers to try connect.")
                 break
 
             tracker_url = tracker[0]
@@ -78,6 +79,7 @@ class Tracker(object):
 
         for sock_addr in self.sock_addrs:
             if len(self.connected_peers) + len(existing_peers) >= MAX_PEERS_CONNECTED:
+                logging.info("Reached maximum number of connected peers.")
                 break
 
             # If the peer is local, don't add it
@@ -91,6 +93,7 @@ class Tracker(object):
 
             new_peer = Peer(int(self.torrent.number_of_pieces), sock_addr.ip, sock_addr.port)
             if not new_peer.connect():
+                logging.info("Failed to connect to peer %s:%d" % (sock_addr.ip, sock_addr.port))
                 continue
 
             print('Connected to %d/%d peers' % (len(self.connected_peers), MAX_PEERS_CONNECTED))
