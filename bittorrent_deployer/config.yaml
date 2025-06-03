@@ -12,11 +12,11 @@ bittorrent:
 
 regions:
   - name: "us-east-1"
-    seeders: 2
-    leechers: 5
+    seeders: 1
+    leechers: 2
   - name: "eu-west-1"
     seeders: 1
-    leechers: 3
+    leechers: 2
   - name: "ap-southeast-1"
     seeders: 1
     leechers: 2
