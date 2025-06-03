@@ -17,4 +17,4 @@ regions:
 - leechers: 2
   name: ap-southeast-1
   seeders: 1
-timeout_minutes: 30
+timeout_minutes: 5
