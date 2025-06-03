@@ -195,7 +195,7 @@ class Run(object):
         # Write to CSV every 0.5 seconds
         if not hasattr(self, 'last_csv_write') or current_time - self.last_csv_write >= 0.5:
             with open('download_progress.csv', 'a') as f:
-                f.write(f"{self.torrent.name},{percentage_completed}\n")
+                f.write(f"{self.torrent.name},{new_progression}\n")
             self.last_csv_write = current_time
 
         self.last_log_line = current_log_line
