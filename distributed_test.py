@@ -759,7 +759,6 @@ fi
 
 # Create necessary directories
 mkdir -p {TORRENT_TEMP_DIR}
-mkdir -p {SEED_TEMP_DIR}
 
 echo "=== Downloading torrent file ==="
 send_log_update "Downloading torrent file..."
@@ -770,16 +769,42 @@ send_log_update "Torrent file download completed"
 
 # Role-specific setup
 if [ "{role}" == "{ROLE_SEEDER}" ]; then
-    echo "=== Seeder Setup: Downloading actual file ==="
-    send_log_update "Seeder downloading actual file for seeding..."
-    curl -L -o {SEED_TEMP_DIR}/{SEED_FILENAME} {seed_fileurl}
+    echo "=== Seeder Setup: Downloading seed file to working directory ==="
+    send_log_update "Seeder downloading seed file to project directory..."
+    
+    # Get the actual filename from the URL or use a default
+    SEED_FILENAME_FROM_URL=$(basename "{seed_fileurl}")
+    if [ -z "$SEED_FILENAME_FROM_URL" ] || [ "$SEED_FILENAME_FROM_URL" = "{seed_fileurl}" ]; then
+        SEED_FILENAME_FROM_URL="{SEED_FILENAME}"
+    fi
+    
+    echo "Downloading seed file: $SEED_FILENAME_FROM_URL"
+    echo "Target location: {BITTORRENT_PROJECT_DIR}/$SEED_FILENAME_FROM_URL"
+    
+    # Download seed file directly to the project directory (working directory)
+    curl -L -o "{BITTORRENT_PROJECT_DIR}/$SEED_FILENAME_FROM_URL" {seed_fileurl}
     SEED_CURL_EXIT_CODE=$?
     echo "Seed file download completed with exit code: $SEED_CURL_EXIT_CODE"
-    send_log_update "Seed file download completed"
+    send_log_update "Seed file downloaded to project directory: $SEED_FILENAME_FROM_URL"
     
     if [ $SEED_CURL_EXIT_CODE -ne 0 ]; then
         echo "ERROR: Failed to download seed file!"
         send_log_update "ERROR: Failed to download seed file for seeder!"
+        exit 1
+    fi
+    
+    # Verify the file exists and show its details
+    if [ -f "{BITTORRENT_PROJECT_DIR}/$SEED_FILENAME_FROM_URL" ]; then
+        SEED_FILE_SIZE=$(stat -f%z "{BITTORRENT_PROJECT_DIR}/$SEED_FILENAME_FROM_URL" 2>/dev/null || stat -c%s "{BITTORRENT_PROJECT_DIR}/$SEED_FILENAME_FROM_URL" 2>/dev/null || echo "unknown")
+        echo "✓ Seed file verified in working directory: $SEED_FILENAME_FROM_URL ($SEED_FILE_SIZE bytes)"
+        send_log_update "Seed file verified: $SEED_FILENAME_FROM_URL ($SEED_FILE_SIZE bytes)"
+        
+        # List current directory contents to confirm
+        echo "Current working directory contents:"
+        ls -la "{BITTORRENT_PROJECT_DIR}/"
+    else
+        echo "ERROR: Seed file not found in working directory after download!"
+        send_log_update "ERROR: Seed file not found in working directory!"
         exit 1
     fi
 else
@@ -809,16 +834,28 @@ send_log_update "BitTorrent environment configured - Role: {role}, Port: $BITTOR
 # Start log streaming in background
 start_log_streaming
 
-echo "=== Starting BitTorrent Client Immediately ==="
-send_log_update "Starting BitTorrent client immediately after setup..."
+echo "=== Changing to Project Directory ==="
+cd {BITTORRENT_PROJECT_DIR}
+echo "Current working directory: $(pwd)"
+echo "Directory contents before BitTorrent execution:"
+ls -la
+
+echo "=== Starting BitTorrent Client ==="
+send_log_update "Starting BitTorrent client from project directory: $(pwd)"
 
 if [ "{role}" == "{ROLE_SEEDER}" ]; then
-    send_log_update "Starting BitTorrent client as SEEDER"
+    send_log_update "Starting BitTorrent client as SEEDER from $(pwd)"
     echo "Command: python3 -m main -s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
+    echo "Working directory: $(pwd)"
+    echo "Seed files in current directory:"
+    ls -la *.* 2>/dev/null || echo "No files found"
+    
     python3 -m main -s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
 else
-    send_log_update "Starting BitTorrent client as LEECHER"
+    send_log_update "Starting BitTorrent client as LEECHER from $(pwd)"
     echo "Command: python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
+    echo "Working directory: $(pwd)"
+    
     python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
 fi
 
