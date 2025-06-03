@@ -461,6 +461,7 @@ class AWSManager:
         self.aws_config = aws_config
         self.region_clients = {}
         self.region_amis = {}
+        self.region_security_groups = {}
     
     def get_ec2_client(self, region):
         if region not in self.region_clients:
@@ -469,6 +470,132 @@ class AWSManager:
                 region_name=region,
             )
         return self.region_clients[region]
+    
+    def create_bittorrent_security_group(self, region):
+        """Create a permissive security group for BitTorrent testing"""
+        if region in self.region_security_groups:
+            return self.region_security_groups[region], None
+            
+        try:
+            ec2_client = self.get_ec2_client(region)
+            
+            # Create security group
+            group_name = f"bittorrent-test-{int(time.time())}"
+            group_description = "Permissive security group for BitTorrent network testing"
+            
+            response = ec2_client.create_security_group(
+                GroupName=group_name,
+                Description=group_description
+            )
+            
+            security_group_id = response['GroupId']
+            
+            # Add comprehensive inbound rules for BitTorrent
+            inbound_rules = [
+                # HTTP/HTTPS for controller communication
+                {
+                    'IpProtocol': 'tcp',
+                    'FromPort': 80,
+                    'ToPort': 80,
+                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                },
+                {
+                    'IpProtocol': 'tcp',
+                    'FromPort': 443,
+                    'ToPort': 443,
+                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                },
+                # SSH for debugging
+                {
+                    'IpProtocol': 'tcp',
+                    'FromPort': 22,
+                    'ToPort': 22,
+                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                },
+                # Controller port
+                {
+                    'IpProtocol': 'tcp',
+                    'FromPort': 8080,
+                    'ToPort': 8080,
+                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                },
+                # BitTorrent peer ports (wide range for peer connections)
+                {
+                    'IpProtocol': 'tcp',
+                    'FromPort': 6881,
+                    'ToPort': 6999,
+                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                },
+                # Additional BitTorrent range
+                {
+                    'IpProtocol': 'tcp',
+                    'FromPort': 49152,
+                    'ToPort': 65535,
+                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                },
+                # UDP for DHT and tracker communication
+                {
+                    'IpProtocol': 'udp',
+                    'FromPort': 6881,
+                    'ToPort': 6999,
+                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                },
+                # UDP DHT port range
+                {
+                    'IpProtocol': 'udp',
+                    'FromPort': 49152,
+                    'ToPort': 65535,
+                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                },
+                # Allow all ICMP for network diagnostics
+                {
+                    'IpProtocol': 'icmp',
+                    'FromPort': -1,
+                    'ToPort': -1,
+                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                }
+            ]
+            
+            # Add inbound rules in batches to avoid API limits
+            for rule in inbound_rules:
+                try:
+                    ec2_client.authorize_security_group_ingress(
+                        GroupId=security_group_id,
+                        IpPermissions=[rule]
+                    )
+                except Exception as rule_error:
+                    print(f"{COLOR_YELLOW}⚠ Warning: Could not add inbound rule {rule}: {rule_error}{COLOR_RESET}")
+            
+            # Ensure all outbound traffic is allowed (usually default, but let's be explicit)
+            try:
+                ec2_client.authorize_security_group_egress(
+                    GroupId=security_group_id,
+                    IpPermissions=[
+                        {
+                            'IpProtocol': '-1',  # All protocols
+                            'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                        }
+                    ]
+                )
+            except Exception as egress_error:
+                # This might fail if the rule already exists, which is fine
+                pass
+            
+            self.region_security_groups[region] = security_group_id
+            return security_group_id, None
+            
+        except Exception as e:
+            return None, f"Failed to create security group in {region}: {str(e)}"
+    
+    def cleanup_security_groups(self):
+        """Clean up created security groups"""
+        for region, sg_id in self.region_security_groups.items():
+            try:
+                ec2_client = self.get_ec2_client(region)
+                ec2_client.delete_security_group(GroupId=sg_id)
+                print(f"{COLOR_GREEN}✓ Deleted security group {sg_id} in {region}{COLOR_RESET}")
+            except Exception as e:
+                print(f"{COLOR_YELLOW}⚠ Could not delete security group {sg_id} in {region}: {e}{COLOR_RESET}")
     
     def get_latest_ubuntu_ami(self, region):
         """Get latest Ubuntu 22.04 AMI for the specified region"""
@@ -612,6 +739,34 @@ send_log_update "Starting system update..."
 echo "System update completed with exit code: $?"
 send_log_update "System update completed"
 
+echo "=== Network Configuration and Diagnostics ==="
+send_log_update "Configuring network settings for BitTorrent..."
+
+# Get public IP and network info
+PUBLIC_IP=$(curl -s https://api.ipify.org || echo "unknown")
+PRIVATE_IP=$(hostname -I | awk '{{print $1}}' || echo "unknown")
+
+echo "Public IP: $PUBLIC_IP"
+echo "Private IP: $PRIVATE_IP"
+send_log_update "Network - Public IP: $PUBLIC_IP, Private IP: $PRIVATE_IP"
+
+# Configure iptables to be more permissive for BitTorrent
+echo "Configuring iptables for BitTorrent..."
+iptables -F 2>/dev/null || true
+iptables -X 2>/dev/null || true
+iptables -t nat -F 2>/dev/null || true
+iptables -t nat -X 2>/dev/null || true
+iptables -P INPUT ACCEPT 2>/dev/null || true
+iptables -P FORWARD ACCEPT 2>/dev/null || true
+iptables -P OUTPUT ACCEPT 2>/dev/null || true
+
+# Test network connectivity
+echo "Testing network connectivity..."
+ping -c 3 8.8.8.8 > /dev/null 2>&1 && echo "Internet connectivity: OK" || echo "Internet connectivity: FAILED"
+curl -s http://{controller_ip}:{controller_port}/stream > /dev/null 2>&1 && echo "Controller connectivity: OK" || echo "Controller connectivity: FAILED"
+
+send_log_update "Network configuration completed"
+
 echo "=== Installing System Packages ==="
 send_log_update "Installing system packages..."
 {INSTALL_PACKAGES_CMD}
@@ -679,7 +834,22 @@ fi
 
 export BITTORRENT_ROLE="{role}"
 export INSTANCE_ID="{instance_id}"
+export PUBLIC_IP="$PUBLIC_IP"
+export PRIVATE_IP="$PRIVATE_IP"
 echo "{instance_id}" > /tmp/instance_id.txt
+
+# BitTorrent specific environment variables for better connectivity
+export BITTORRENT_PORT=6881
+export BITTORRENT_BIND_IP="0.0.0.0"
+export BITTORRENT_ANNOUNCE_IP="$PUBLIC_IP"
+
+echo "BitTorrent Environment:"
+echo "  Role: {role}"
+echo "  Port: $BITTORRENT_PORT"
+echo "  Public IP: $PUBLIC_IP"
+echo "  Private IP: $PRIVATE_IP"
+
+send_log_update "BitTorrent environment configured - Role: {role}, Port: $BITTORRENT_PORT"
 
 # Start log streaming in background
 start_log_streaming
@@ -733,7 +903,7 @@ trap - EXIT TERM INT
 """
         return base64.b64encode(script.encode()).decode()
     
-    def launch_instance(self, region, user_data, ami_id):
+    def launch_instance(self, region, user_data, ami_id, security_group_id):
         ec2_client = self.get_ec2_client(region)
         
         response = ec2_client.run_instances(
@@ -742,7 +912,7 @@ trap - EXIT TERM INT
             MinCount=1,
             MaxCount=1,
             UserData=user_data,
-            SecurityGroupIds=[self.aws_config['security_group']]
+            SecurityGroupIds=[security_group_id]
         )
         
         return response['Instances'][0]['InstanceId']
@@ -837,6 +1007,15 @@ class BitTorrentDeployer:
                         print(f"{COLOR_GREEN}✓ Terminated instances in {region_name}{COLOR_RESET}")
                     except Exception as e:
                         print(f"{COLOR_RED}✗ Error terminating instances in {region_name}: {e}{COLOR_RESET}")
+            
+            # Wait a bit for instances to terminate before cleaning up security groups
+            print(f"{COLOR_YELLOW}⏳ Waiting briefly for instances to terminate...{COLOR_RESET}")
+            time.sleep(10)
+            
+            try:
+                self.aws_manager.cleanup_security_groups()
+            except Exception as e:
+                print(f"{COLOR_YELLOW}⚠ Error cleaning up security groups: {e}{COLOR_RESET}")
                         
             if self.log_server:
                 self.log_server.stop()
@@ -882,6 +1061,14 @@ class BitTorrentDeployer:
         region_name = region_config['name']
         instance_ids = []
         
+        # Create security group for this region
+        security_group_id, sg_error = self.aws_manager.create_bittorrent_security_group(region_name)
+        if sg_error:
+            print(f"{COLOR_RED}✗ Failed to create security group in {region_name}: {sg_error}{COLOR_RESET}")
+            return region_name, []
+        
+        print(f"{COLOR_GREEN}✓ Created security group {security_group_id} in {region_name}{COLOR_RESET}")
+        
         # Deploy seeders
         for i in range(region_config['seeders']):
             instance_id = f"{region_name}-{ROLE_SEEDER}-{i}"
@@ -895,7 +1082,7 @@ class BitTorrentDeployer:
                 instance_id
             )
             
-            ec2_id = self.aws_manager.launch_instance(region_name, user_data, ami_id)
+            ec2_id = self.aws_manager.launch_instance(region_name, user_data, ami_id, security_group_id)
             instance_ids.append(ec2_id)
         
         # Deploy leechers
@@ -911,7 +1098,7 @@ class BitTorrentDeployer:
                 instance_id
             )
             
-            ec2_id = self.aws_manager.launch_instance(region_name, user_data, ami_id)
+            ec2_id = self.aws_manager.launch_instance(region_name, user_data, ami_id, security_group_id)
             instance_ids.append(ec2_id)
         
         return region_name, instance_ids
@@ -958,6 +1145,7 @@ class BitTorrentDeployer:
             print(f"📂 GitHub repo: {github_repo}")
             print(f"📁 Torrent URL: {torrent_url}")
             print(f"🌱 Seed file URL: {seed_fileurl}")
+            print(f"🔒 Security: Auto-creating permissive security groups for BitTorrent")
             
             print(f"\n{COLOR_BOLD}=== Deployment Plan ==={COLOR_RESET}")
             for region in self.config.get_regions():
@@ -1064,6 +1252,12 @@ class BitTorrentDeployer:
             for region_name, instance_ids in self.region_instances.items():
                 self.aws_manager.terminate_instances(region_name, instance_ids)
                 print(f"{COLOR_GREEN}✓ Terminated {len(instance_ids)} instances in {region_name}{COLOR_RESET}")
+            
+            # Wait a bit for instances to terminate before cleaning up security groups
+            print(f"{COLOR_YELLOW}⏳ Waiting for instances to terminate before cleaning up security groups...{COLOR_RESET}")
+            time.sleep(30)
+            
+            self.aws_manager.cleanup_security_groups()
             
             self.log_server.stop()
             print(f"{COLOR_GREEN}✓ Log server stopped{COLOR_RESET}")
