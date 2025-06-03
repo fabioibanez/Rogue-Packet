@@ -61,9 +61,15 @@ def plot_dirsize_overtime(dir_path: str, stop_event: threading.Event, save_path:
 
 def save_download_progress(dir_path: str, stop_event: threading.Event, save_path: str) -> None:
     """Save download progress to CSV file."""
+    
+    # Write header if file doesn't exist
+    if not os.path.exists(save_path):
+        with open(save_path, 'w') as f:
+            f.write("file_path,size,time\n")
+    
     while not stop_event.is_set():
         with open(save_path, 'a') as f:
-            f.write(f"{dir_path},{get_dir_size(dir_path)},{time.time()}\n") 
+            f.write(f"{dir_path},{get_dir_size(dir_path)},{time.time()}\n")
         time.sleep(PLOT_INTERVAL)
 
 def cleanup_torrent_download(torrent_file: str) -> None:
