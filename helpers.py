@@ -59,6 +59,13 @@ def plot_dirsize_overtime(dir_path: str, stop_event: threading.Event, save_path:
         
         time.sleep(PLOT_INTERVAL)
 
+def save_download_progress(dir_path: str, stop_event: threading.Event, save_path: str) -> None:
+    """Save download progress to CSV file."""
+    while not stop_event.is_set():
+        with open(save_path, 'a') as f:
+            f.write(f"{dir_path},{get_dir_size(dir_path)},{time.time()}\n") 
+        time.sleep(PLOT_INTERVAL)
+
 def cleanup_torrent_download(torrent_file: str) -> None:
     """Deletes all files in the current directory that match the pattern of the torrent file name."""
     shutil.rmtree(_target := os.path.splitext(os.path.basename(torrent_file))[0], ignore_errors=True)

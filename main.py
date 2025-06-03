@@ -3,7 +3,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse
-from helpers import cleanup_torrent_download, plot_dirsize_overtime
+from helpers import cleanup_torrent_download, plot_dirsize_overtime, save_download_progress
 import os
 import threading
 import time
@@ -28,6 +28,7 @@ class Run(object):
     percentage_completed = NO_PROGRESS_YET_SENTINEL
     last_log_line = ""
     plot_stop_event = threading.Event()
+    save_progress_stop_event = threading.Event()
 
     torrent_file: str
 
@@ -44,7 +45,7 @@ class Run(object):
         self.peers_manager.start()  # This starts the peer manager thread
 
         self._start_plot_thread()
-        
+        self._start_save_progress_thread()
         logging.info("PeersManager Started")
         logging.info("PiecesManager Started")
 
@@ -62,6 +63,19 @@ class Run(object):
             )
             plot_thread.start()
             logging.info(f"\033[1;32mStarted plotting directory size for: {torrent_dir}\033[0m")
+
+    def _start_save_progress_thread(self) -> None:
+        """Start the save progress thread"""
+        torrent_name = os.path.splitext(os.path.basename(self.torrent_file))[0]
+        torrent_dir = torrent_name
+        save_path = f"{torrent_dir}_progress.csv"
+        save_progress_thread = threading.Thread(
+            target=save_download_progress,
+            args=(torrent_dir, self.save_progress_stop_event, save_path),
+            daemon=True
+        )
+        save_progress_thread.start()
+        logging.info(f"\033[1;32mStarted saving progress for: {torrent_dir} to {save_path}\033[0m")
 
     def start(self):
         peers = self.tracker.get_peers_from_trackers()
@@ -158,7 +172,7 @@ class Run(object):
 
     def display_progression(self):
         """
-        Displays the current download progress in a human-readable format and logs to CSV.
+        Displays the current download progress in a human-readable format.
         
         This method:
         1. Calculates total bytes downloaded by counting completed blocks
@@ -167,10 +181,7 @@ class Run(object):
            - Number of connected peers that are unchoked (actively sharing)
            - Percentage of total file downloaded
            - Number of complete pieces vs total pieces
-        4. Logs progress to CSV every 0.5 seconds
         """
-        current_time = time.time()
-        
         # This is the total number of bytes downloaded by us for our specific torrent file
         new_progression = 0
 
@@ -192,20 +203,13 @@ class Run(object):
         if current_log_line != self.last_log_line:
             print(current_log_line)
 
-        # Write to CSV every 0.5 seconds
-        if not hasattr(self, 'last_csv_write') or current_time - self.last_csv_write >= 0.5:
-            with open('download_progress.csv', 'a') as f:
-                f.write(f"{self.torrent.name},{new_progression}\n")
-            self.last_csv_write = current_time
-
         self.last_log_line = current_log_line
         self.percentage_completed = new_progression
 
     def _exit_threads(self):
-        """
-        Exits the threads
-        """
+        """Exits the threads"""
         self.plot_stop_event.set()  # Stop the plot thread
+        self.save_progress_stop_event.set()  # Stop the save progress thread
         self.peers_manager.is_active = False
         os._exit(0)
 
