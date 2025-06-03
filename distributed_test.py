@@ -593,12 +593,17 @@ send_log() {{
 }}
 
 upload_csv() {{
+    send_log "Collecting CSV files from project directory..."
     find {BITTORRENT_PROJECT_DIR} -name "*.csv" -type f | while read f; do
-        [ -f "$f" ] && curl -X POST -F "instance_id={instance_id}" -F "csv_filename=$(basename "$f")" -F "csv_file=@$f" http://{controller_ip}:{controller_port}{CSV_ENDPOINT} || true
+        if [ -f "$f" ]; then
+            curl -X POST -F "instance_id={instance_id}" -F "csv_filename=$(basename "$f")" -F "csv_file=@$f" http://{controller_ip}:{controller_port}{CSV_ENDPOINT} || true
+            send_log "Uploaded CSV: $(basename "$f")"
+        fi
     done
 }}
 
 cleanup() {{
+    send_log "Instance {instance_id} shutting down"
     upload_csv
     [ -f {LOG_FILE_PATH} ] && curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
     curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "interrupted"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT} || true
@@ -606,55 +611,104 @@ cleanup() {{
 
 trap cleanup EXIT TERM INT
 
-send_log "Starting {instance_id} ({role})"
+echo "=== Starting {instance_id} ({role}) ==="
+send_log "Instance {instance_id} starting setup (Role: {role})"
 
-# System setup
+echo "=== System Update ==="
+send_log "Starting system update..."
 {UPDATE_CMD}
-{INSTALL_PACKAGES_CMD}
+send_log "System update completed"
 
-# Network config
+echo "=== Installing Packages ==="
+send_log "Installing system packages..."
+{INSTALL_PACKAGES_CMD}
+send_log "System packages installation completed"
+
+echo "=== Network Configuration ==="
+send_log "Configuring network settings..."
 PUBLIC_IP=$(curl -s https://api.ipify.org || echo "unknown")
+PRIVATE_IP=$(hostname -I | awk '{{print $1}}' || echo "unknown")
+send_log "Network - Public IP: $PUBLIC_IP, Private IP: $PRIVATE_IP"
+
+# Configure iptables
 iptables -F 2>/dev/null || true
 iptables -P INPUT ACCEPT 2>/dev/null || true
 iptables -P OUTPUT ACCEPT 2>/dev/null || true
+send_log "Network configuration completed"
 
-# Clone and setup
+echo "=== Cloning Repository ==="
+send_log "Cloning repository from {github_repo}"
 git clone -b feat/distribed {github_repo} {BITTORRENT_PROJECT_DIR}
+send_log "Repository cloned successfully"
+
+echo "=== Installing Dependencies ==="
 cd {BITTORRENT_PROJECT_DIR}
-pip3 install -r requirements.txt --timeout 300
+send_log "Starting Python dependencies installation..."
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements.txt --timeout 300
+PIP_EXIT=$?
+if [ $PIP_EXIT -ne 0 ]; then
+    send_log "ERROR: pip install failed"
+    exit 1
+fi
+send_log "Python dependencies installation completed"
 
-# Download torrent
+echo "=== Downloading Files ==="
 mkdir -p {TORRENT_TEMP_DIR}
+send_log "Downloading torrent file..."
 curl -L -o {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} {torrent_url}
+send_log "Torrent file download completed"
 
-# Role setup
+# Role-specific setup
 if [ "{role}" == "{ROLE_SEEDER}" ]; then
+    send_log "Seeder downloading seed file to project directory..."
     SEED_FILE=$(basename "{seed_fileurl}")
     [ -z "$SEED_FILE" ] && SEED_FILE="{SEED_FILENAME}"
     curl -L -o "$SEED_FILE" {seed_fileurl}
-    [ ! -f "$SEED_FILE" ] && exit 1
+    if [ ! -f "$SEED_FILE" ]; then
+        send_log "ERROR: Failed to download seed file"
+        exit 1
+    fi
+    send_log "Seed file downloaded: $SEED_FILE"
+else
+    send_log "Leecher setup - will download via BitTorrent"
 fi
 
-# Environment
+echo "=== Environment Setup ==="
 export BITTORRENT_ROLE="{role}"
 export INSTANCE_ID="{instance_id}"
 export PUBLIC_IP="$PUBLIC_IP"
 export BITTORRENT_PORT=6881
+export BITTORRENT_BIND_IP="0.0.0.0"
+export BITTORRENT_ANNOUNCE_IP="$PUBLIC_IP"
+send_log "BitTorrent environment configured - Role: {role}, Port: 6881"
 
-# Start BitTorrent
-send_log "Starting BitTorrent client"
-tail -f /tmp/startup.log | while read line; do send_log "STARTUP: $line"; done &
+echo "=== Starting BitTorrent Client ==="
+send_log "Starting BitTorrent client from project directory..."
+# Start log streaming
+tail -f /tmp/startup.log | while read line; do send_log "STARTUP: $line"; sleep 0.5; done &
+
 if [ "{role}" == "{ROLE_SEEDER}" ]; then
+    send_log "Starting BitTorrent client as SEEDER"
     python3 -m main -s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
 else
+    send_log "Starting BitTorrent client as LEECHER"
     python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
 fi
 
-send_log "BitTorrent finished"
+echo "=== BitTorrent Completed ==="
+send_log "BitTorrent client finished"
+
+# Stop log streaming
+pkill -f "tail -f" 2>/dev/null || true
+
+echo "=== Final Steps ==="
 upload_csv
+send_log "Sending final logs to controller..."
 curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
 curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "{STATUS_COMPLETE}"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT}
 
+send_log "Instance setup completed, shutting down..."
 trap - EXIT TERM INT
 {SHUTDOWN_CMD}
 """
