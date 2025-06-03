@@ -13,12 +13,9 @@ bittorrent:
 regions:
   - name: "us-east-1"
     seeders: 1
-    leechers: 2
+    leechers: 1
   - name: "eu-west-1"
     seeders: 1
-    leechers: 2
-  - name: "ap-southeast-1"
-    seeders: 1
-    leechers: 2
+    leechers: 1
 
 timeout_minutes: 5

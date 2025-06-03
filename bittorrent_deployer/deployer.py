@@ -111,47 +111,6 @@ class BitTorrentDeployer:
         print(f"{COLOR_GREEN}✅ All AMIs found across {len(all_regions)} regions{COLOR_RESET}")
         return region_ami_map, None
     
-    def deploy_region(self, region_config, torrent_url, seed_fileurl, ami_id):
-        """Deploy instances in a single region with maximum parallelism"""
-        region_name = region_config['name']
-        
-        # Prepare all instance configs
-        instance_configs = []
-        
-        # Add seeders
-        for i in range(region_config['seeders']):
-            instance_configs.append({
-                'id': f"{region_name}-{ROLE_SEEDER}-{i}",
-                'role': ROLE_SEEDER
-            })
-        
-        # Add leechers  
-        for i in range(region_config['leechers']):
-            instance_configs.append({
-                'id': f"{region_name}-{ROLE_LEECHER}-{i}",
-                'role': ROLE_LEECHER
-            })
-        
-        # Launch all instances in parallel using ThreadPoolExecutor
-        def launch_single_instance(config):
-            user_data = self.aws_manager.generate_user_data(
-                self.config.get_bittorrent_config()['github_repo'],
-                torrent_url,
-                seed_fileurl,
-                config['role'],
-                self.controller_ip,
-                self.config.get_controller_port(),
-                config['id']
-            )
-            return self.aws_manager.launch_instance(region_name, user_data, ami_id)
-        
-        # Launch all instances simultaneously
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(launch_single_instance, config) for config in instance_configs]
-            instance_ids = [future.result() for future in futures]
-        
-        return region_name, instance_ids
-    
     def wait_for_completion(self, handler, timeout_minutes):
         """Wait for all instances to complete"""
         timeout = time.time() + (timeout_minutes * 60)
@@ -198,27 +157,68 @@ class BitTorrentDeployer:
             print(f"📊 Total: {COLOR_BOLD}{self.total_instance_count}{COLOR_RESET} instances")
             
             print(f"\n{COLOR_BOLD}=== Launching Instances ==={COLOR_RESET}")
-            with ThreadPoolExecutor() as executor:
-                futures = []
+            
+            # Collect ALL instance configs from ALL regions first
+            all_instance_configs = []
+            for region in self.config.get_regions():
+                ami_id = region_ami_map[region['name']]
+                region_name = region['name']
                 
-                for region in self.config.get_regions():
-                    ami_id = region_ami_map[region['name']]
-                    futures.append(
-                        executor.submit(
-                            self.deploy_region,
-                            region,
-                            torrent_url,
-                            seed_fileurl,
-                            ami_id
-                        )
-                    )
+                # Add all seeders for this region
+                for i in range(region['seeders']):
+                    all_instance_configs.append({
+                        'region': region_name,
+                        'ami_id': ami_id,
+                        'instance_id': f"{region_name}-{ROLE_SEEDER}-{i}",
+                        'role': ROLE_SEEDER
+                    })
                 
+                # Add all leechers for this region
+                for i in range(region['leechers']):
+                    all_instance_configs.append({
+                        'region': region_name,
+                        'ami_id': ami_id,
+                        'instance_id': f"{region_name}-{ROLE_LEECHER}-{i}",
+                        'role': ROLE_LEECHER
+                    })
+            
+            print(f"🚀 Launching ALL {len(all_instance_configs)} instances simultaneously...")
+            
+            # Launch ALL instances across ALL regions simultaneously
+            def launch_single_instance(config):
+                user_data = self.aws_manager.generate_user_data(
+                    self.config.get_bittorrent_config()['github_repo'],
+                    torrent_url,
+                    seed_fileurl,
+                    config['role'],
+                    self.controller_ip,
+                    self.config.get_controller_port(),
+                    config['instance_id']
+                )
+                ec2_id = self.aws_manager.launch_instance(config['region'], user_data, config['ami_id'])
+                return config['region'], config['instance_id'], ec2_id
+            
+            # Use max parallelism - launch everything at once
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                futures = [executor.submit(launch_single_instance, config) for config in all_instance_configs]
+                
+                # Collect results by region
                 for future in futures:
                     if self.cleanup_in_progress:
                         break
-                    region_name, instance_ids = future.result()
-                    self.region_instances[region_name] = instance_ids
-                    print(f"{COLOR_GREEN}✓ Launched {len(instance_ids)} instances in {region_name}{COLOR_RESET}")
+                    region_name, instance_id, ec2_id = future.result()
+                    
+                    if region_name not in self.region_instances:
+                        self.region_instances[region_name] = []
+                    self.region_instances[region_name].append(ec2_id)
+                    
+                    print(f"{COLOR_GREEN}✓ Launched {instance_id} in {region_name} (EC2: {ec2_id}){COLOR_RESET}")
+            
+            print(f"{COLOR_GREEN}🎉 ALL {len(all_instance_configs)} instances launched simultaneously!{COLOR_RESET}")
+            
+            # Show summary by region
+            for region_name, instance_ids in self.region_instances.items():
+                print(f"{COLOR_BLUE}📊 {region_name}: {len(instance_ids)} instances{COLOR_RESET}")
             
             if self.cleanup_in_progress:
                 return {}
