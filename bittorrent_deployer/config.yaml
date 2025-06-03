@@ -21,4 +21,4 @@ regions:
     seeders: 1
     leechers: 2
 
-timeout_minutes: 30
+timeout_minutes: 5
