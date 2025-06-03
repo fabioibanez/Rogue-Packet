@@ -16,7 +16,7 @@ import socket
 from urllib.parse import urlparse
 import requests
 
-MAX_PEERS_TRY_CONNECT = 30
+MAX_PEERS_TRY_CONNECT = 200
 MAX_PEERS_CONNECTED = 8
 
 
