@@ -158,7 +158,7 @@ class Run(object):
 
     def display_progression(self):
         """
-        Displays the current download progress in a human-readable format.
+        Displays the current download progress in a human-readable format and logs to CSV.
         
         This method:
         1. Calculates total bytes downloaded by counting completed blocks
@@ -167,10 +167,9 @@ class Run(object):
            - Number of connected peers that are unchoked (actively sharing)
            - Percentage of total file downloaded
            - Number of complete pieces vs total pieces
-        
-        Format:
-        "Connected peers: X active peer - Y% completed | Z/N pieces"
+        4. Logs progress to CSV every 0.5 seconds
         """
+        current_time = time.time()
         
         # This is the total number of bytes downloaded by us for our specific torrent file
         new_progression = 0
@@ -192,6 +191,12 @@ class Run(object):
         current_log_line = f"Connected peers: {number_of_peers} - {round(percentage_completed, 2)}% completed | {self.pieces_manager.complete_pieces}/{self.pieces_manager.number_of_pieces} pieces"
         if current_log_line != self.last_log_line:
             print(current_log_line)
+
+        # Write to CSV every 0.5 seconds
+        if not hasattr(self, 'last_csv_write') or current_time - self.last_csv_write >= 0.5:
+            with open('download_progress.csv', 'a') as f:
+                f.write(f"{self.torrent.name},{percentage_completed}\n")
+            self.last_csv_write = current_time
 
         self.last_log_line = current_log_line
         self.percentage_completed = new_progression
