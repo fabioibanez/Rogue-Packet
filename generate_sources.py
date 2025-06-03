@@ -143,14 +143,14 @@ def generate_config(template_path: str, output_path: str, torrent_path: str, sou
         yaml.dump(config, f, default_flow_style=False)
 
 def main():
-    # clear && python3 generate_sources.py --source-dir seeder_sources --torrents-dir torrents --config-dir --template bittorent_deployer/config.yaml --count 10
+    # clear && python3 generate_sources.py --source-dir seeder_sources --torrents-dir torrents --config-dir bittorrent_deployer/ --template bittorent_deployer/config.yaml --count 10 --size 2097152
     
     parser = argparse.ArgumentParser(description='Generate torrent files and configurations')
     parser.add_argument('--source-dir', default='seeder_sources', help='Directory for source files')
     parser.add_argument('--torrents-dir', default='torrents', help='Directory for torrent files')
     parser.add_argument('--config-dir', default='configs', help='Directory for configuration files')
     parser.add_argument('--template', help='Template configuration file')
-    parser.add_argument('--size', type=int, default=16*1024*1024, help='Size of source files in bytes')
+    parser.add_argument('--size', type=int, default=2*1024*1024, help='Size of source files in bytes')
     parser.add_argument('--count', type=int, default=10, help='Number of files to generate')
     parser.add_argument('--tracker-url', default='udp://tracker.opentrackr.org:1337/announce',
                       help='Tracker URL for torrent files')
