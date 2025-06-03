@@ -3,7 +3,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse
-from helpers import cleanup_torrent_download, plot_dirsize_overtime
+from helpers import cleanup_torrent_download, plot_dirsize_overtime, save_download_progress
 import os
 import threading
 import time
@@ -28,8 +28,10 @@ class Run(object):
     percentage_completed = NO_PROGRESS_YET_SENTINEL
     last_log_line = ""
     plot_stop_event = threading.Event()
+    save_progress_stop_event = threading.Event()
 
     torrent_file: str
+    torrent_dir: str
 
     def __init__(self, args: argparse.Namespace):
         self.verbose: bool = args.verbose
@@ -43,7 +45,10 @@ class Run(object):
         self.peers_manager = PeersManager(self.torrent, self.pieces_manager)
         self.peers_manager.start()  # This starts the peer manager thread
 
+        self.torrent_dir = os.path.splitext(os.path.basename(self.torrent_file))[0]
+
         self._start_plot_thread()
+        self._start_save_progress_thread()
         
         logging.info("PeersManager Started")
         logging.info("PiecesManager Started")
@@ -62,6 +67,17 @@ class Run(object):
             )
             plot_thread.start()
             logging.info(f"\033[1;32mStarted plotting directory size for: {torrent_dir}\033[0m")
+
+    def _start_save_progress_thread(self) -> None:
+        """Start the save progress thread"""
+        save_path = f"{self.torrent_dir}_progress.csv"
+        save_progress_thread = threading.Thread(
+            target=save_download_progress,
+            args=(self.torrent_dir, self.save_progress_stop_event, save_path),
+            daemon=True
+        )
+        save_progress_thread.start()
+        logging.info(f"\033[1;32mStarted saving progress for: {self.torrent_dir} to {save_path}\033[0m")
 
     def start(self):
         peers = self.tracker.get_peers_from_trackers()
@@ -197,10 +213,9 @@ class Run(object):
         self.percentage_completed = new_progression
 
     def _exit_threads(self):
-        """
-        Exits the threads
-        """
+        """Exits the threads"""
         self.plot_stop_event.set()  # Stop the plot thread
+        self.save_progress_stop_event.set()  # Stop the save progress thread
         self.peers_manager.is_active = False
         os._exit(0)
 
