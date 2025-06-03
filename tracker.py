@@ -196,6 +196,8 @@ class Tracker(object):
             return None
 
         if len(response) < size:
+            # FIXME: ??
+            logging.debug(f"Expected size: {size}, received size: {len(response)}")
             logging.debug("Did not get full message.")
 
         if action != response[0:4] or trans_id != response[4:8]:
