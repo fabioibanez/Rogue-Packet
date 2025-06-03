@@ -8,7 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .config import Config
 from .aws_manager import AWSManager
-from .log_server import LogServer, LogHandler
+from .log_server import HybridLogServer as LogServer
+from .log_server import HybridLogHandler as LogHandler
 from .utils import get_public_ip, generate_run_name
 from .constants import (
     DEFAULT_CONFIG_PATH, LOGS_DIR, COMPLETION_CHECK_INTERVAL, ROLE_SEEDER, ROLE_LEECHER,
