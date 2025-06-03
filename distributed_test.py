@@ -13,8 +13,6 @@ POST_LEECHERS_WAIT_SECONDS = 10     # Wait after all leechers start before seede
 # Seeders start in parallel (no interval needed)
 
 # Constants
-# File Paths and Names
-DEFAULT_CONFIG_PATH = "config.yaml"
 LOGS_DIR = "logs"
 TORRENT_TEMP_DIR = "/tmp/torrents"
 SEED_TEMP_DIR = "/tmp/seed"
@@ -74,6 +72,11 @@ COLOR_YELLOW = '\033[93m'
 COLOR_BLUE = '\033[94m'
 COLOR_MAGENTA = '\033[95m'
 COLOR_CYAN = '\033[96m'
+
+# File Paths and Names
+DEFAULT_CONFIG_PATH = "config.yaml"
+DEFAULT_CONFIG_PATH = os.environ.get('CPATH', DEFAULT_CONFIG_PATH)
+print(f"{COLOR_GREEN}Using config path: {DEFAULT_CONFIG_PATH}{COLOR_RESET}")
 
 # Random words for run naming
 RUN_WORDS = [
