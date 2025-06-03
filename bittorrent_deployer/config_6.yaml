@@ -1,0 +1,20 @@
+aws:
+  instance_type: t2.micro
+  security_group: default
+bittorrent:
+  github_repo: https://github.com/fabioibanez/Rogue-Packet.git
+  seed_fileurl: https://raw.githubusercontent.com/fabioibanez/Rogue-Packet/feat/distribed/seeder_sources/torrent_6.dat
+  torrent_url: https://raw.githubusercontent.com/fabioibanez/Rogue-Packet/feat/distribed/torrents/torrent_6.dat.torrent
+controller:
+  port: 8080
+regions:
+- leechers: 5
+  name: us-east-1
+  seeders: 2
+- leechers: 3
+  name: eu-west-1
+  seeders: 1
+- leechers: 2
+  name: ap-southeast-1
+  seeders: 1
+timeout_minutes: 30
