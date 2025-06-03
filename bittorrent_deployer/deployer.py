@@ -286,16 +286,16 @@ class BitTorrentDeployer:
                 
             print(f"{COLOR_GREEN}✅ Deployed {self.total_instance_count} instances across {len(self.config.get_regions())} regions{COLOR_RESET}")
             
-            # Wait for completion with live monitoring
-            print(f"\n{COLOR_BOLD}=== Live Status Dashboard ==={COLOR_RESET}")
-            print("🚀 Each instance runs BitTorrent immediately after setup")
+            # Wait for completion with simple monitoring
+            print(f"\n{COLOR_BOLD}=== Monitoring Deployment ==={COLOR_RESET}")
+            print("📊 Two phases: startup (system setup) → core-run (BitTorrent)")
+            print(f"📁 Logs organized by phase in: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes...")
-            print(f"📁 Logs being saved to: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C anytime to stop and cleanup{COLOR_RESET}")
-            print("\n" + "=" * 80)
+            print("\n" + "=" * 50)
             
-            # Initial dashboard display
-            LogHandler.display_status_dashboard()
+            # Initial status display
+            LogHandler.display_simple_status()
             
             completed = self.wait_for_completion(self.handler, self.config.get_timeout_minutes())
             
@@ -304,25 +304,31 @@ class BitTorrentDeployer:
             
             if completed:
                 print(f"\n{COLOR_GREEN}✅ All instances completed successfully{COLOR_RESET}")
-                LogHandler.display_status_dashboard()
+                LogHandler.display_simple_status()
             else:
                 print(f"\n{COLOR_YELLOW}⚠ Timeout reached, some instances may not have completed{COLOR_RESET}")
-                LogHandler.display_status_dashboard()
+                LogHandler.display_simple_status()
             
-            # Process and display log summary
-            print(f"\n{COLOR_BOLD}=== Log Summary ==={COLOR_RESET}")
+            # Process and display log summary with phase separation
+            print(f"\n{COLOR_BOLD}=== Log Summary (Organized by Phase) ==={COLOR_RESET}")
             run_dir = os.path.join(LOGS_DIR, self.run_name)
-            for instance_id, status in self.handler.completion_status.items():
-                final_log = os.path.join(run_dir, f"{instance_id}.log")
-                stream_log = os.path.join(run_dir, f"{instance_id}_stream.log")
-                
-                if os.path.exists(final_log):
-                    print(f"{COLOR_GREEN}✓ {instance_id}: {status} (final log: {final_log}){COLOR_RESET}")
-                else:
-                    print(f"{COLOR_RED}✗ {instance_id}: {status} (no final log){COLOR_RESET}")
-                
-                if os.path.exists(stream_log):
-                    print(f"  {COLOR_CYAN}📡 Stream log: {stream_log}{COLOR_RESET}")
+            
+            # Check for logs in each phase
+            for phase in ['startup', 'core-run']:
+                phase_dir = os.path.join(run_dir, phase)
+                if os.path.exists(phase_dir):
+                    print(f"\n{COLOR_CYAN}📁 {phase.upper()} LOGS:{COLOR_RESET}")
+                    for log_file in os.listdir(phase_dir):
+                        if log_file.endswith('.log'):
+                            log_path = os.path.join(phase_dir, log_file)
+                            file_size = os.path.getsize(log_path)
+                            print(f"  📝 {log_path} ({file_size} bytes)")
+            
+            # Show completion status
+            if self.handler.completion_status:
+                print(f"\n{COLOR_BOLD}=== Final Status ==={COLOR_RESET}")
+                for instance_id, status in self.handler.completion_status.items():
+                    print(f"✅ {instance_id}: {status}")
             
             # Cleanup resources
             print(f"\n{COLOR_BOLD}=== Cleanup ==={COLOR_RESET}")

@@ -144,26 +144,37 @@ class AWSManager:
 set -x
 exec > >(tee -a /tmp/startup.log) 2>&1
 
-# Function to send log updates to controller
-send_log_update() {{
-    local message="$1"
+# Function to update VM state locally and notify controller
+update_vm_state() {{
+    local state="$1"
+    echo "$state" > /tmp/vm_state.txt
     curl -s -X POST -H "Content-Type: application/json" \\
-        -d '{{"instance_id": "{instance_id}", "log_chunk": "'"$message"'", "timestamp": '$(date +%s)'}}' \\
+        -d '{{"instance_id": "{instance_id}", "state": "'"$state"'", "timestamp": '$(date +%s)'}}' \\
+        http://{controller_ip}:{controller_port}/state > /dev/null 2>&1 || true
+}}
+
+# Function to send log chunks to controller
+send_log_chunk() {{
+    local phase="$1"
+    local log_file="$2"
+    curl -s -X POST -H "Content-Type: application/json" \\
+        -d '{{"instance_id": "{instance_id}", "phase": "'"$phase"'", "log_chunk": "'"$(cat $log_file | tail -n 20 | sed 's/"/\\"/g')"'", "timestamp": '$(date +%s)'}}' \\
         http://{controller_ip}:{controller_port}{STREAM_ENDPOINT} > /dev/null 2>&1 || true
 }}
 
 # Function to send final logs on exit
 send_final_logs() {{
-    echo "=== Sending emergency/final logs to controller ==="
-    send_log_update "Instance {instance_id} is shutting down (potentially interrupted)"
+    echo "=== Sending final logs to controller ==="
+    update_vm_state "error"
     
+    # Send startup logs if they exist
+    if [ -f /tmp/startup.log ]; then
+        curl -X POST -F "instance_id={instance_id}" -F "phase=startup" -F "logfile=@/tmp/startup.log" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
+    fi
+    
+    # Send core-run logs if they exist
     if [ -f {LOG_FILE_PATH} ]; then
-        echo "Sending final BitTorrent logs..."
-        curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
-    else
-        echo "Creating emergency log file..."
-        cp /tmp/startup.log {LOG_FILE_PATH} 2>/dev/null || echo "Emergency log from {instance_id}" > {LOG_FILE_PATH}
-        curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
+        curl -X POST -F "instance_id={instance_id}" -F "phase=core-run" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
     fi
     
     curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "interrupted"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT} || true
@@ -172,28 +183,25 @@ send_final_logs() {{
 # Set up trap to send logs on any exit
 trap 'send_final_logs' EXIT TERM INT
 
-# Function to stream log file changes (with recursion prevention)
+# Function to stream logs periodically
 start_log_streaming() {{
-    # Disable debug logging for streaming functions to prevent recursion
-    {{ set +x;
-        # Stream startup log, but filter out send_log_update commands to prevent loops
-        tail -f /tmp/startup.log | grep -v "send_log_update" | while read line; do
-            # Re-enable debug briefly for the actual curl call
-            {{ set -x; send_log_update "STARTUP: $line"; set +x; }} 2>/dev/null
-            sleep 1
-        done &
+    # Stream startup logs every 10 seconds
+    {{
+        while [ -f /tmp/startup.log ] && [ "$(cat /tmp/vm_state.txt 2>/dev/null)" = "startup" ]; do
+            send_log_chunk "startup" "/tmp/startup.log"
+            sleep 10
+        done
         
-        # Wait for BitTorrent log file and stream it
-        while [ ! -f {LOG_FILE_PATH} ]; do sleep 2; done
-        tail -f {LOG_FILE_PATH} | while read line; do
-            {{ set -x; send_log_update "BITTORRENT: $line"; set +x; }} 2>/dev/null
-            sleep 1
-        done &
-    }} 2>/dev/null &
+        # Stream core-run logs every 10 seconds  
+        while [ -f {LOG_FILE_PATH} ] && [ "$(cat /tmp/vm_state.txt 2>/dev/null)" = "core-run" ]; do
+            send_log_chunk "core-run" "{LOG_FILE_PATH}"
+            sleep 10
+        done
+    }} &
 }}
 
 echo "=== Starting instance setup for {instance_id} ==="
-send_log_update "Instance {instance_id} starting setup (Role: {role})"
+update_vm_state "startup"
 
 echo "Role: {role}"
 echo "Torrent URL: {torrent_url}"
@@ -201,26 +209,20 @@ echo "Controller: {controller_ip}:{controller_port}"
 echo "Timestamp: $(date)"
 
 echo "=== System Update ==="
-send_log_update "Starting system update..."
 {UPDATE_CMD}
 echo "System update completed with exit code: $?"
-send_log_update "System update completed"
 
 echo "=== Installing System Packages ==="
-send_log_update "Installing system packages..."
 {INSTALL_PACKAGES_CMD}
 echo "System packages installed with exit code: $?"
-send_log_update "System packages installation completed"
 
 echo "=== Python and pip versions ==="
 python3 --version
 pip3 --version
 
 echo "=== Cloning Repository ==="
-send_log_update "Cloning repository from {github_repo}"
 git clone -b feat/distribed {github_repo} {BITTORRENT_PROJECT_DIR}
 echo "Git clone completed with exit code: $?"
-send_log_update "Repository cloned successfully"
 
 cd {BITTORRENT_PROJECT_DIR}
 echo "Current directory: $(pwd)"
@@ -228,16 +230,14 @@ echo "Directory contents:"
 ls -la
 
 echo "=== Installing Python Dependencies ==="
-send_log_update "Starting Python dependencies installation..."
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt --verbose --timeout 300
 PIP_EXIT_CODE=$?
 echo "pip install completed with exit code: $PIP_EXIT_CODE"
-send_log_update "Python dependencies installation completed"
 
 if [ $PIP_EXIT_CODE -ne 0 ]; then
     echo "ERROR: pip install failed!"
-    send_log_update "ERROR: pip install failed"
+    update_vm_state "error"
     exit 1
 fi
 
@@ -246,29 +246,24 @@ mkdir -p {TORRENT_TEMP_DIR}
 mkdir -p {SEED_TEMP_DIR}
 
 echo "=== Downloading torrent file ==="
-send_log_update "Downloading torrent file..."
 curl -L -o {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} {torrent_url}
 CURL_EXIT_CODE=$?
 echo "curl completed with exit code: $CURL_EXIT_CODE"
-send_log_update "Torrent file download completed"
 
 # Role-specific setup
 if [ "{role}" == "{ROLE_SEEDER}" ]; then
     echo "=== Seeder Setup: Downloading actual file ==="
-    send_log_update "Seeder downloading actual file for seeding..."
     curl -L -o {SEED_TEMP_DIR}/{SEED_FILENAME} {seed_fileurl}
     SEED_CURL_EXIT_CODE=$?
     echo "Seed file download completed with exit code: $SEED_CURL_EXIT_CODE"
-    send_log_update "Seed file download completed"
     
     if [ $SEED_CURL_EXIT_CODE -ne 0 ]; then
         echo "ERROR: Failed to download seed file!"
-        send_log_update "ERROR: Failed to download seed file for seeder!"
+        update_vm_state "error"
         exit 1
     fi
 else
     echo "=== Leecher Setup: No seed file needed ==="
-    send_log_update "Leecher setup - will download file via BitTorrent"
 fi
 
 export BITTORRENT_ROLE="{role}"
@@ -278,43 +273,42 @@ echo "{instance_id}" > /tmp/instance_id.txt
 # Start log streaming in background
 start_log_streaming
 
-echo "=== Starting BitTorrent Client Immediately ==="
-send_log_update "Starting BitTorrent client immediately after setup..."
+echo "=== Startup Complete - Starting BitTorrent Core ==="
+# Send final startup logs
+send_log_chunk "startup" "/tmp/startup.log"
+
+# Transition to core-run phase
+update_vm_state "core-run"
 
 if [ "{role}" == "{ROLE_SEEDER}" ]; then
-    send_log_update "Starting BitTorrent client as SEEDER"
+    echo "Starting BitTorrent client as SEEDER"
     echo "Command: python3 -m main -s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
     python3 -m main -s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
 else
-    send_log_update "Starting BitTorrent client as LEECHER"
+    echo "Starting BitTorrent client as LEECHER"
     echo "Command: python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
     python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
 fi
 
 BITTORRENT_EXIT_CODE=$?
 echo "BitTorrent client completed with exit code: $BITTORRENT_EXIT_CODE"
-send_log_update "BitTorrent client finished"
 
 echo "=== BitTorrent client finished ==="
+update_vm_state "completed"
 
 # Stop log streaming
-pkill -f "tail -f" 2>/dev/null || true
-
-# Append startup log to main log for debugging
-echo "" >> {LOG_FILE_PATH}
-echo "=======================================" >> {LOG_FILE_PATH}
-echo "=== STARTUP LOG ===" >> {LOG_FILE_PATH}
-echo "=======================================" >> {LOG_FILE_PATH}
-cat /tmp/startup.log >> {LOG_FILE_PATH}
+pkill -f "send_log_chunk" 2>/dev/null || true
 
 echo "=== Sending final logs to controller ==="
-send_log_update "Sending final logs to controller..."
-curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
+# Send final startup logs
+curl -X POST -F "instance_id={instance_id}" -F "phase=startup" -F "logfile=@/tmp/startup.log" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
+
+# Send final core-run logs  
+curl -X POST -F "instance_id={instance_id}" -F "phase=core-run" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
 
 curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "{STATUS_COMPLETE}"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT}
 
 echo "=== Instance setup completed ==="
-send_log_update "Instance setup completed, shutting down..."
 
 # Remove the trap since we're exiting normally
 trap - EXIT TERM INT

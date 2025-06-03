@@ -23,23 +23,13 @@ class LogHandler(BaseHTTPRequestHandler):
     # Class variables for shared state across requests
     logs_dir = LOGS_DIR
     completion_status = {}
-    instance_status = {}
+    instance_states = {}  # Simple state tracking: "startup", "core-run", "completed", "error"
     run_name = None
-    last_display_time = 0
-    
-    # Status stages
-    STATUS_STARTING = "starting"
-    STATUS_UPDATING = "updating"
-    STATUS_INSTALLING = "installing"
-    STATUS_DOWNLOADING = "downloading"
-    STATUS_RUNNING = "running"
-    STATUS_COMPLETED = "completed"
-    STATUS_ERROR = "error"
     
     @classmethod
     def set_run_name(cls, run_name):
         """
-        Set the run name and create log directory
+        Set the run name and create log directories
         
         Args:
             run_name (str): Unique run identifier
@@ -47,116 +37,55 @@ class LogHandler(BaseHTTPRequestHandler):
         cls.run_name = run_name
         run_dir = os.path.join(cls.logs_dir, run_name)
         os.makedirs(run_dir, exist_ok=True)
+        
+        # Create subdirectories for different log phases
+        os.makedirs(os.path.join(run_dir, "startup"), exist_ok=True)
+        os.makedirs(os.path.join(run_dir, "core-run"), exist_ok=True)
     
     @classmethod
-    def update_instance_status(cls, instance_id, status, progress=None, message=None):
+    def update_instance_state(cls, instance_id, state):
         """
-        Update instance status and refresh display
+        Update instance state
         
         Args:
             instance_id (str): Instance identifier
-            status (str): Current status
-            progress (float, optional): Progress percentage
-            message (str, optional): Additional status message
+            state (str): Current state ("startup", "core-run", "completed", "error")
         """
-        cls.instance_status[instance_id] = {
-            'status': status,
-            'progress': progress,
-            'message': message or '',
+        cls.instance_states[instance_id] = {
+            'state': state,
             'timestamp': time.time()
         }
-        
-        # Throttle display updates to avoid spam
-        current_time = time.time()
-        if current_time - cls.last_display_time > 1.0:  # Update max once per second
-            cls.display_status_dashboard()
-            cls.last_display_time = current_time
+        cls.display_simple_status()
     
     @classmethod
-    def display_status_dashboard(cls):
-        """Display a clean status dashboard"""
-        print('\033[2J\033[H', end='')  # Clear screen and move cursor to top
+    def display_simple_status(cls):
+        """Display simple status summary"""
+        print(f"\n=== BitTorrent Network Status ({cls.run_name}) ===")
         
-        print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 BitTorrent Network Status Dashboard{COLOR_RESET}")
-        print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 Run: {cls.run_name}{COLOR_RESET}")
-        print("=" * 80)
+        # Group by state
+        states = {}
+        for instance_id, info in cls.instance_states.items():
+            state = info['state']
+            if state not in states:
+                states[state] = []
+            states[state].append(instance_id)
         
-        # Group by region and role
-        regions = {}
-        for instance_id, info in cls.instance_status.items():
-            # Parse instance_id format: "region-role-index" 
-            # Handle multi-part regions like "eu-west-1"
-            parts = instance_id.split('-')
-            if len(parts) >= 3:
-                # Find the role (seeder or leecher) in the parts
-                role = None
-                region_parts = []
-                
-                for i, part in enumerate(parts):
-                    if part in ['seeder', 'leecher']:
-                        role = part
-                        region_parts = parts[:i]  # Everything before the role
-                        break
-                
-                if role and region_parts:
-                    region = '-'.join(region_parts)  # Reconstruct region name
-                    if region not in regions:
-                        regions[region] = {'seeders': [], 'leechers': []}
-                    regions[region][role + 's'].append((instance_id, info))
-        
-        for region_name, roles in regions.items():
-            print(f"\n{COLOR_BOLD}{COLOR_BLUE}🌍 {region_name.upper()}{COLOR_RESET}")
+        for state, instances in states.items():
+            emoji = {
+                'startup': '🔄',
+                'core-run': '🚀', 
+                'completed': '✅',
+                'error': '❌'
+            }.get(state, '❓')
             
-            # Show seeders
-            if roles['seeders']:
-                print(f"  {COLOR_GREEN}🌱 Seeders:{COLOR_RESET}")
-                for instance_id, info in roles['seeders']:
-                    status_emoji, status_text = cls._get_status_display(info['status'], info.get('progress'))
-                    print(f"    {status_emoji} {instance_id}: {status_text}")
-            
-            # Show leechers  
-            if roles['leechers']:
-                print(f"  {COLOR_BLUE}📥 Leechers:{COLOR_RESET}")
-                for instance_id, info in roles['leechers']:
-                    status_emoji, status_text = cls._get_status_display(info['status'], info.get('progress'))
-                    print(f"    {status_emoji} {instance_id}: {status_text}")
+            print(f"{emoji} {state.upper()}: {len(instances)} instances")
+            for instance_id in instances:
+                print(f"    {instance_id}")
         
-        # Summary
-        total_instances = len(cls.instance_status)
-        completed_count = len([i for i in cls.instance_status.values() if i['status'] == cls.STATUS_COMPLETED])
-        running_count = len([i for i in cls.instance_status.values() if i['status'] == cls.STATUS_RUNNING])
-        
-        print(f"\n{COLOR_BOLD}📊 Summary:{COLOR_RESET}")
-        print(f"  Total: {total_instances} | Running: {running_count} | Completed: {completed_count}")
-    
-    @classmethod 
-    def _get_status_display(cls, status, progress=None):
-        """
-        Get emoji and text for status display
-        
-        Args:
-            status (str): Current status
-            progress (float, optional): Progress percentage
-            
-        Returns:
-            tuple: (emoji, status_text)
-        """
-        status_map = {
-            cls.STATUS_STARTING: ("🔄", "Starting up"),
-            cls.STATUS_UPDATING: ("📦", "Updating system"), 
-            cls.STATUS_INSTALLING: ("⚙️", "Installing packages"),
-            cls.STATUS_DOWNLOADING: ("⬇️", "Downloading files"),
-            cls.STATUS_RUNNING: ("🚀", f"Running BitTorrent {progress}%" if progress else "Running BitTorrent"),
-            cls.STATUS_COMPLETED: ("🎉", "Completed"),
-            cls.STATUS_ERROR: ("❌", "Error")
-        }
-        
-        emoji, text = status_map.get(status, ("❓", f"Unknown: {status}"))
-        
-        if status == cls.STATUS_RUNNING and progress is not None:
-            text = f"Running BitTorrent {progress:.1f}%"
-            
-        return emoji, text
+        total = len(cls.instance_states)
+        completed = len(states.get('completed', []))
+        print(f"\nTotal: {total} | Completed: {completed}")
+        print("=" * 50)
     
     def do_POST(self):
         """Handle POST requests from EC2 instances"""
@@ -166,12 +95,33 @@ class LogHandler(BaseHTTPRequestHandler):
             self._handle_stream()
         elif self.path == COMPLETION_ENDPOINT:
             self._handle_completion()
+        elif self.path == '/state':
+            self._handle_state_update()
         else:
             self.send_response(HTTP_NOT_FOUND)
             self.end_headers()
     
+    def _handle_state_update(self):
+        """Handle state updates from instances"""
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length)
+        
+        try:
+            data = json.loads(post_data.decode())
+            instance_id = data.get('instance_id')
+            state = data.get('state')
+            
+            if instance_id and state:
+                self.update_instance_state(instance_id, state)
+                
+        except json.JSONDecodeError:
+            pass
+        
+        self.send_response(HTTP_OK)
+        self.end_headers()
+    
     def _handle_logs(self):
-        """Handle final log file upload from instances"""
+        """Handle final log file upload from instances (now with phase separation)"""
         content_type = self.headers.get('Content-Type', '')
         if not content_type.startswith('multipart/form-data'):
             self.send_response(400)
@@ -185,132 +135,58 @@ class LogHandler(BaseHTTPRequestHandler):
         parts = post_data.split(b'--' + boundary)
         
         instance_id = None
+        phase = None
         log_data = None
         
         for part in parts:
             if b'name="instance_id"' in part:
                 instance_id = part.split(b'\r\n\r\n')[1].split(b'\r\n')[0].decode()
+            elif b'name="phase"' in part:
+                phase = part.split(b'\r\n\r\n')[1].split(b'\r\n')[0].decode()
             elif b'name="logfile"' in part:
                 log_data = part.split(b'\r\n\r\n', 1)[1].rsplit(b'\r\n', 1)[0]
         
-        if instance_id and log_data:
+        if instance_id and phase and log_data:
             run_dir = os.path.join(self.logs_dir, self.run_name)
-            os.makedirs(run_dir, exist_ok=True)
-            log_path = os.path.join(run_dir, f"{instance_id}.log")
+            phase_dir = os.path.join(run_dir, phase)
+            os.makedirs(phase_dir, exist_ok=True)
+            
+            log_path = os.path.join(phase_dir, f"{instance_id}_{phase}.log")
             with open(log_path, 'wb') as f:
                 f.write(log_data)
-            print(f"{COLOR_GREEN}📝 Final log received from {instance_id}{COLOR_RESET}")
+            print(f"📝 Final {phase} log received from {instance_id}")
         
         self.send_response(HTTP_OK)
         self.end_headers()
     
     def _handle_stream(self):
-        """Handle streaming log updates from instances"""
+        """Handle streaming log chunks from instances (now with phase separation)"""
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
         
         try:
             data = json.loads(post_data.decode())
             instance_id = data.get('instance_id')
+            phase = data.get('phase', 'unknown')
             log_chunk = data.get('log_chunk', '').strip()
             timestamp = data.get('timestamp', time.time())
             
             if instance_id and log_chunk:
-                # Save to stream log file
+                # Save to appropriate phase stream log file
                 run_dir = os.path.join(self.logs_dir, self.run_name)
-                os.makedirs(run_dir, exist_ok=True)
-                log_path = os.path.join(run_dir, f"{instance_id}_stream.log")
+                phase_dir = os.path.join(run_dir, phase) 
+                os.makedirs(phase_dir, exist_ok=True)
+                
+                log_path = os.path.join(phase_dir, f"{instance_id}_{phase}_stream.log")
                 
                 with open(log_path, 'a') as f:
                     f.write(f"[{datetime.fromtimestamp(timestamp).strftime('%H:%M:%S')}] {log_chunk}\n")
-                
-                # Parse log chunk to determine status
-                self._parse_log_for_status(instance_id, log_chunk)
                 
         except json.JSONDecodeError:
             pass
         
         self.send_response(HTTP_OK)
         self.end_headers()
-    
-    def _parse_log_for_status(self, instance_id, log_chunk):
-        """
-        Parse log chunk and update instance status accordingly
-        
-        Args:
-            instance_id (str): Instance identifier
-            log_chunk (str): Log message from instance
-        """
-        log_lower = log_chunk.lower()
-        
-        is_seeder = 'seeder' in instance_id
-        
-        if 'starting setup' in log_lower:
-            self.update_instance_status(instance_id, self.STATUS_STARTING)
-        elif 'system update' in log_lower:
-            self.update_instance_status(instance_id, self.STATUS_UPDATING)
-        elif 'installing' in log_lower and ('packages' in log_lower or 'dependencies' in log_lower):
-            self.update_instance_status(instance_id, self.STATUS_INSTALLING)
-        elif 'downloading' in log_lower and ('torrent' in log_lower or 'seed' in log_lower):
-            self.update_instance_status(instance_id, self.STATUS_DOWNLOADING)
-        elif 'starting bittorrent client' in log_lower:
-            self.update_instance_status(instance_id, self.STATUS_RUNNING)
-        elif 'bittorrent client finished' in log_lower:
-            self.update_instance_status(instance_id, self.STATUS_COMPLETED)
-        elif not is_seeder and ('downloaded' in log_lower or 'progress' in log_lower or '%' in log_chunk):
-            progress = self._extract_progress(log_chunk)
-            if progress is not None:
-                self.update_instance_status(instance_id, self.STATUS_RUNNING, progress=progress)
-        elif 'error' in log_lower or 'failed' in log_lower:
-            self.update_instance_status(instance_id, self.STATUS_ERROR, message=log_chunk[:50])
-    
-    def _extract_progress(self, log_chunk):
-        """
-        Extract download progress percentage from log chunk
-        
-        Args:
-            log_chunk (str): Log message containing progress info
-            
-        Returns:
-            float or None: Progress percentage if found
-        """
-        # Look for percentage patterns
-        percent_match = re.search(r'(\d+(?:\.\d+)?)\s*%', log_chunk)
-        if percent_match:
-            return float(percent_match.group(1))
-        
-        # Look for "X/Y bytes" patterns and calculate percentage
-        bytes_match = re.search(r'(\d+(?:\.\d+)?[KMG]?B?)\s*/\s*(\d+(?:\.\d+)?[KMG]?B?)', log_chunk)
-        if bytes_match:
-            try:
-                downloaded = self._parse_bytes(bytes_match.group(1))
-                total = self._parse_bytes(bytes_match.group(2))
-                if total > 0:
-                    return (downloaded / total) * 100
-            except:
-                pass
-        
-        return None
-    
-    def _parse_bytes(self, byte_str):
-        """
-        Parse byte string like '1.5MB' to bytes
-        
-        Args:
-            byte_str (str): Byte string with unit
-            
-        Returns:
-            int: Number of bytes
-        """
-        match = re.match(r'(\d+(?:\.\d+)?)\s*([KMG]?B?)', byte_str.upper())
-        if not match:
-            return 0
-        
-        value = float(match.group(1))
-        unit = match.group(2)
-        
-        multipliers = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, '': 1}
-        return int(value * multipliers.get(unit, 1))
     
     def _handle_completion(self):
         """Handle completion notification from instances"""
@@ -324,9 +200,9 @@ class LogHandler(BaseHTTPRequestHandler):
         if instance_id:
             self.completion_status[instance_id] = status
             if status == "interrupted":
-                self.update_instance_status(instance_id, self.STATUS_ERROR, message="Interrupted")
+                self.update_instance_state(instance_id, "error")
             else:
-                self.update_instance_status(instance_id, self.STATUS_COMPLETED)
+                self.update_instance_state(instance_id, "completed")
         
         self.send_response(HTTP_OK)
         self.end_headers()
