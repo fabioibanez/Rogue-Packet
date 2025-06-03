@@ -65,8 +65,17 @@ class PeersManager(Thread):
         denom = self.max_collective_download_rate
         # NOTE: design decision, if 0 then just send since there's not proportional share
         if denom == 0:
+            logging.info("\033[1;33m[Proportional Share] No download rate yet, sending to peer: %s\033[0m", peer.ip)
             return True
-        return random.uniform(0, 1) < peer.stats.calculate_download_rate() / denom
+        
+        peer_rate = peer.stats.calculate_download_rate()
+        probability = peer_rate / denom
+        should_send = random.uniform(0, 1) < probability
+        
+        logging.info("\033[1;33m[Proportional Share] Peer: %s, Rate: %.2f, Total Rate: %.2f, Probability: %.2f, Send: %s\033[0m",
+                    peer.ip, peer_rate, denom, probability, should_send)
+        
+        return should_send
 
     def broadcast_have(self, piece_index: int, bitfield: BitArray) -> None:
         have_message = Have(piece_index)
