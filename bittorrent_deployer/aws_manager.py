@@ -1,5 +1,5 @@
 """
-AWS Management for BitTorrent Network Deployment
+AWS Management for BitTorrent Network Deployment - Updated for Pull-based Logging
 """
 
 import boto3
@@ -119,6 +119,67 @@ class AWSManager:
             
         except Exception as e:
             return False, f"Error validating AMI {ami_id}: {str(e)}"
+    
+    def get_instance_public_ip(self, region, ec2_id):
+        """
+        Get public IP address of an EC2 instance
+        
+        Args:
+            region (str): AWS region name
+            ec2_id (str): EC2 instance ID
+            
+        Returns:
+            str or None: Public IP address if available
+        """
+        try:
+            ec2_client = self.get_ec2_client(region)
+            response = ec2_client.describe_instances(InstanceIds=[ec2_id])
+            
+            for reservation in response['Reservations']:
+                for instance in reservation['Instances']:
+                    if instance['InstanceId'] == ec2_id:
+                        public_ip = instance.get('PublicIpAddress')
+                        state = instance.get('State', {}).get('Name', 'unknown')
+                        
+                        # Only return IP if instance is running
+                        if state == 'running' and public_ip:
+                            return public_ip
+                        
+            return None
+        except Exception as e:
+            print(f"⚠ Error getting IP for {ec2_id} in {region}: {e}")
+            return None
+    
+    def get_instance_status(self, region, ec2_id):
+        """
+        Get detailed status of an EC2 instance
+        
+        Args:
+            region (str): AWS region name  
+            ec2_id (str): EC2 instance ID
+            
+        Returns:
+            dict: Instance status information
+        """
+        try:
+            ec2_client = self.get_ec2_client(region)
+            response = ec2_client.describe_instances(InstanceIds=[ec2_id])
+            
+            for reservation in response['Reservations']:
+                for instance in reservation['Instances']:
+                    if instance['InstanceId'] == ec2_id:
+                        return {
+                            'instance_id': ec2_id,
+                            'state': instance.get('State', {}).get('Name', 'unknown'),
+                            'public_ip': instance.get('PublicIpAddress'),
+                            'private_ip': instance.get('PrivateIpAddress'),
+                            'launch_time': instance.get('LaunchTime'),
+                            'instance_type': instance.get('InstanceType')
+                        }
+            
+            return {'instance_id': ec2_id, 'state': 'not_found'}
+        except Exception as e:
+            return {'instance_id': ec2_id, 'state': 'error', 'error': str(e)}
     
     def generate_user_data(self, github_repo, torrent_url, seed_fileurl, role, 
                           controller_ip, controller_port, instance_id):
