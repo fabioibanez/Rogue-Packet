@@ -17,45 +17,51 @@ update_vm_state() {
     ) 2>/dev/null
 }
 
-# Function to send log chunks to controller (isolated from debug logging)
+# Function to send log chunks to controller (simplified and working)
 send_log_chunk() {
-    ( # Run in subshell to isolate from debug logging
-        set +x  # Disable debug logging for this function
-        local phase="$1"
-        local log_file="$2"
-        if [ -f "$log_file" ]; then
-            # Get last 20 lines, escape quotes, send to controller
-            local content=$(tail -n 20 "$log_file" | sed 's/"/\\"/g' | tr '\n' '\\n' | sed 's/\\n$//')
-            curl -s -X POST -H "Content-Type: application/json" \
-                -d '{"instance_id": "{{INSTANCE_ID}}", "phase": "'"$phase"'", "log_chunk": "'"$content"'", "timestamp": '$(date +%s)'}' \
-                http://{{CONTROLLER_IP}}:{{CONTROLLER_PORT}}/stream >/dev/null 2>&1 || true
-        fi
-    ) 2>/dev/null
+    local phase="$1"
+    local log_file="$2"
+    
+    if [ -f "$log_file" ] && [ -s "$log_file" ]; then
+        # Get last 50 lines and send them
+        local log_content=$(tail -n 50 "$log_file" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+        
+        # Send to controller
+        curl -s -X POST -H "Content-Type: application/json" \
+            -d "{\"instance_id\": \"{{INSTANCE_ID}}\", \"phase\": \"$phase\", \"log_chunk\": \"$log_content\", \"timestamp\": $(date +%s)}" \
+            http://{{CONTROLLER_IP}}:{{CONTROLLER_PORT}}/stream >/dev/null 2>&1 || true
+            
+        echo "Sent $phase log chunk to controller ($(wc -l < "$log_file") total lines)"
+    else
+        echo "Log file $log_file does not exist or is empty"
+    fi
 }
 
-# Function to stream logs periodically (completely sequential, no overlap)
+# Function to stream logs periodically (simplified and working)
 start_log_streaming() {
     local phase="$1"
     local log_file="$2"
     
-    echo "Starting log streaming for phase: $phase, file: $log_file"
+    echo "=== Starting log streaming for $phase phase ==="
+    echo "Monitoring file: $log_file"
+    echo "Current VM state: $(cat /tmp/vm_state.txt 2>/dev/null || echo 'unknown')"
     
-    ( # Run in isolated subshell
-        set +x  # Disable all debug logging for streaming
-        exec 2>/dev/null  # Suppress any stderr from streaming
-        
-        # Stream logs every 15 seconds while in the specified phase
+    (
+        # Stream logs every 10 seconds while in the specified phase
         while [ "$(cat /tmp/vm_state.txt 2>/dev/null || echo unknown)" = "$phase" ]; do
+            echo "[$phase] Checking for logs to stream..."
             if [ -f "$log_file" ]; then
+                echo "[$phase] Found log file, sending chunk..."
                 send_log_chunk "$phase" "$log_file"
+            else
+                echo "[$phase] Log file $log_file not found yet"
             fi
-            sleep 15
+            sleep 10
         done
-        
-        echo "Log streaming stopped for phase: $phase"
-    ) &  # Background the streaming process
+        echo "[$phase] Log streaming stopped - phase changed from $phase"
+    ) &
     
-    echo "Started background log streaming for $phase (PID: $!)"
+    echo "Started background log streaming for $phase (monitoring $log_file)"
 }
 
 # Function to send final logs on exit (isolated from debug logging)
@@ -87,12 +93,25 @@ send_final_logs() {
 trap 'send_final_logs' EXIT TERM INT
 
 echo "=== Starting instance setup for {{INSTANCE_ID}} ==="
-update_vm_state "startup"
-
 echo "Role: {{ROLE}}"
 echo "Torrent URL: {{TORRENT_URL}}"
 echo "Controller: {{CONTROLLER_IP}}:{{CONTROLLER_PORT}}"
 echo "Timestamp: $(date)"
+
+# Set initial state and add some test content to startup log
+update_vm_state "startup"
+
+# Add some test entries to startup log to make sure streaming works
+echo "=== STARTUP LOG TEST ENTRIES ===" 
+echo "Instance {{INSTANCE_ID}} started at $(date)"
+echo "This is a test log entry for startup phase"
+echo "Startup log should be streaming to controller"
+echo "=== END TEST ENTRIES ==="
+
+# Test the send_log_chunk function immediately
+echo "=== Testing log streaming function ==="
+echo "Startup log file size before test: $(wc -l < /tmp/startup.log) lines"
+send_log_chunk "startup" "/tmp/startup.log"
 
 echo "=== System Update ==="
 apt-get update
@@ -158,14 +177,22 @@ echo "{{INSTANCE_ID}}" > /tmp/instance_id.txt
 
 # Start STARTUP phase log streaming only
 echo "=== Starting STARTUP phase log streaming ==="
+echo "Startup log file: /tmp/startup.log"
+echo "Startup log exists: $([ -f /tmp/startup.log ] && echo 'YES' || echo 'NO')"
+echo "Startup log size: $([ -f /tmp/startup.log ] && wc -l < /tmp/startup.log || echo '0') lines"
 start_log_streaming "startup" "/tmp/startup.log"
+
+# Give startup log streaming a moment to initialize
+sleep 2
 
 echo "=== Startup Complete - Transitioning to BitTorrent Core ==="
 echo "==============================================="
 echo "STARTUP PHASE COMPLETE - NO MORE STARTUP LOGS"
 echo "==============================================="
 
-# Send final startup logs
+# Send final startup logs with debug info
+echo "=== Sending final startup log chunk ==="
+echo "Final startup log size: $(wc -l < /tmp/startup.log) lines"
 send_log_chunk "startup" "/tmp/startup.log"
 
 # IMPORTANT: Stop all startup log streaming before moving to core-run
@@ -183,9 +210,26 @@ echo "============================================="
 echo "CORE-RUN PHASE STARTING - BITTORRENT LOGS ONLY"
 echo "============================================="
 
-# Start CORE-RUN phase log streaming only
+# Create the BitTorrent log file with initial content
+echo "=== Creating BitTorrent log file ==="
+echo "BitTorrent log file: {{LOG_FILE_PATH}}"
+mkdir -p $(dirname {{LOG_FILE_PATH}})
+echo "========================================" > {{LOG_FILE_PATH}}
+echo "BITTORRENT LOG STARTED" >> {{LOG_FILE_PATH}}
+echo "Instance: {{INSTANCE_ID}}" >> {{LOG_FILE_PATH}}
+echo "Role: {{ROLE}}" >> {{LOG_FILE_PATH}}
+echo "Timestamp: $(date)" >> {{LOG_FILE_PATH}}
+echo "========================================" >> {{LOG_FILE_PATH}}
+
+echo "Created BitTorrent log file: $([ -f {{LOG_FILE_PATH}} ] && echo 'YES' || echo 'NO')"
+echo "Initial BitTorrent log size: $(wc -l < {{LOG_FILE_PATH}}) lines"
+
+# Start CORE-RUN phase log streaming
 echo "=== Starting CORE-RUN phase log streaming ==="  
 start_log_streaming "core-run" "{{LOG_FILE_PATH}}"
+
+# Give core-run log streaming a moment to initialize  
+sleep 2
 
 if [ "{{ROLE}}" == "seeder" ]; then
     echo "============================================="
@@ -194,11 +238,14 @@ if [ "{{ROLE}}" == "seeder" ]; then
     echo "============================================="
     
     # Add clear marker to BitTorrent log file
-    echo "========================================" > {{LOG_FILE_PATH}}
+    echo "========================================" >> {{LOG_FILE_PATH}}
     echo "BITTORRENT CLIENT STARTING AS SEEDER" >> {{LOG_FILE_PATH}}
+    echo "Command: python3 -m main -s {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}}" >> {{LOG_FILE_PATH}}
+    echo "Working Directory: $(pwd)" >> {{LOG_FILE_PATH}}
     echo "Timestamp: $(date)" >> {{LOG_FILE_PATH}}
     echo "========================================" >> {{LOG_FILE_PATH}}
     
+    echo "=== Running BitTorrent seeder ==="
     python3 -m main -s {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}} >> {{LOG_FILE_PATH}} 2>&1
 else
     echo "============================================="
@@ -207,13 +254,19 @@ else
     echo "============================================="
     
     # Add clear marker to BitTorrent log file
-    echo "========================================" > {{LOG_FILE_PATH}}
+    echo "========================================" >> {{LOG_FILE_PATH}}
     echo "BITTORRENT CLIENT STARTING AS LEECHER" >> {{LOG_FILE_PATH}}
+    echo "Command: python3 -m main {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}}" >> {{LOG_FILE_PATH}}
+    echo "Working Directory: $(pwd)" >> {{LOG_FILE_PATH}}
     echo "Timestamp: $(date)" >> {{LOG_FILE_PATH}}
     echo "========================================" >> {{LOG_FILE_PATH}}
     
+    echo "=== Running BitTorrent leecher ==="
     python3 -m main {{TORRENT_TEMP_DIR}}/{{TORRENT_FILENAME}} >> {{LOG_FILE_PATH}} 2>&1
 fi
+
+echo "=== BitTorrent client execution finished ==="
+echo "Final BitTorrent log size: $(wc -l < {{LOG_FILE_PATH}}) lines"
 
 BITTORRENT_EXIT_CODE=$?
 
