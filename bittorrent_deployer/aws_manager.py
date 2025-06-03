@@ -14,6 +14,7 @@ from .constants import (
     ROLE_SEEDER, ROLE_LEECHER, STATUS_COMPLETE
 )
 
+
 class AWSManager:
     """Manages AWS operations for BitTorrent network deployment"""
     
@@ -171,20 +172,24 @@ send_final_logs() {{
 # Set up trap to send logs on any exit
 trap 'send_final_logs' EXIT TERM INT
 
-# Function to stream log file changes
+# Function to stream log file changes (with recursion prevention)
 start_log_streaming() {{
-    {{
-        tail -f /tmp/startup.log | while read line; do
-            send_log_update "STARTUP: $line"
-            sleep 0.5
+    # Disable debug logging for streaming functions to prevent recursion
+    {{ set +x;
+        # Stream startup log, but filter out send_log_update commands to prevent loops
+        tail -f /tmp/startup.log | grep -v "send_log_update" | while read line; do
+            # Re-enable debug briefly for the actual curl call
+            {{ set -x; send_log_update "STARTUP: $line"; set +x; }} 2>/dev/null
+            sleep 1
         done &
         
+        # Wait for BitTorrent log file and stream it
         while [ ! -f {LOG_FILE_PATH} ]; do sleep 2; done
         tail -f {LOG_FILE_PATH} | while read line; do
-            send_log_update "BITTORRENT: $line"
-            sleep 0.5
+            {{ set -x; send_log_update "BITTORRENT: $line"; set +x; }} 2>/dev/null
+            sleep 1
         done &
-    }} &
+    }} 2>/dev/null &
 }}
 
 echo "=== Starting instance setup for {instance_id} ==="
