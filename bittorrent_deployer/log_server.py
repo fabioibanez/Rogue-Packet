@@ -26,6 +26,10 @@ class LogHandler(BaseHTTPRequestHandler):
     instance_states = {}  # Simple state tracking: "startup", "core-run", "completed", "error"
     run_name = None
     
+    def log_message(self, format, *args):
+        """Suppress default HTTP server access logs"""
+        pass  # Do nothing - suppresses all HTTP request logging
+    
     @classmethod
     def set_run_name(cls, run_name):
         """
