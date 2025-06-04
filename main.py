@@ -204,8 +204,8 @@ class Run(object):
         #             size = sum(os.path.getsize(os.path.join(dir_path, f)) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)))
         #             logging.info(f"[TERM-DIRECTORY-SIZE] {dir_path}: {size} @ {elapsed_time}")
         
+        logging.info(f"[TERM-DIRECTORY-SIZE] Really, we're looking for: {self.torrent_dir} in {root} @ {elapsed_time}")
         for root, dirs, files in os.walk("/tmp"):
-            logging.info(f"[TERM-DIRECTORY-SIZE] Really, we're looking for: {self.torrent_dir} in {root} @ {elapsed_time}")
             for name in dirs:
                 dir_path = os.path.join(root, name)
                 if os.path.isdir(dir_path):
@@ -213,6 +213,8 @@ class Run(object):
                         continue
                     size = sum(os.path.getsize(os.path.join(dir_path, f)) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)))
                     logging.info(f"[TERM-DIRECTORY-SIZE] {dir_path}: {size} @ {elapsed_time}")
+
+        logging.info(f"[FLAG-GET-ELAPSED] Total time taken: {elapsed_time:.2f} seconds")
 
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
