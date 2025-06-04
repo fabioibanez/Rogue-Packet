@@ -693,7 +693,6 @@ send_log "Instance {instance_id} starting setup (Role: {role})"
 
 echo "=== System Update ==="
 send_log "Starting system update..."
-{UPDATE_CMD}
 send_log "System update completed"
 
 echo "=== Installing Packages ==="
