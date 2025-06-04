@@ -18,7 +18,7 @@ TORRENT_TEMP_DIR = "/tmp/torrents"
 SEED_TEMP_DIR = "/tmp/seed"
 BITTORRENT_PROJECT_DIR = "/tmp/bittorrent-project"
 LOG_FILE_PATH = "/tmp/bittorrent.log"
-TORRENT_FILENAME = "file.torrent"
+TORRENT_FILENAME = "thetorrentfile.torrent"
 SEED_FILENAME = "seed_file"
 
 # API Endpoints
