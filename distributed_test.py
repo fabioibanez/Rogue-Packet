@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Enhanced BitTorrent Network Deployment Script with Two-Phase Deployment
-- Phase 1: Deploy all seeders first and wait for them to be ready
-- Phase 2: Deploy leechers after seeders are serving
-- Includes CSV file collection from BitTorrent clients
+Enhanced BitTorrent Network Deployment Script with Coordinated Startup
+- All instances complete setup in parallel
+- Leechers start first with staggered timing
+- Seeders start in parallel after leechers
+- Continuous CSV file streaming with updates
 """
 
 # Timing Constants for Coordinated Startup
@@ -13,8 +14,6 @@ POST_LEECHERS_WAIT_SECONDS = 10     # Wait after all leechers start before seede
 # Seeders start in parallel (no interval needed)
 
 # Constants
-# File Paths and Names
-DEFAULT_CONFIG_PATH = "config.yaml"
 LOGS_DIR = "logs"
 TORRENT_TEMP_DIR = "/tmp/torrents"
 SEED_TEMP_DIR = "/tmp/seed"
@@ -98,6 +97,11 @@ import sys
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor
+
+# File Paths and Names
+DEFAULT_CONFIG_PATH = "config.yaml"
+DEFAULT_CONFIG_PATH = os.environ.get('CPATH', DEFAULT_CONFIG_PATH)
+print(f"{COLOR_GREEN}Using config path: {DEFAULT_CONFIG_PATH}{COLOR_RESET}")
 
 class Config:
     def __init__(self, config_path=DEFAULT_CONFIG_PATH):
@@ -682,346 +686,99 @@ send_log() {{
 }}
 
 upload_csv() {{
-    send_log "Collecting CSV files from project directory..."
     find {BITTORRENT_PROJECT_DIR} -name "*.csv" -type f | while read f; do
-        if [ -f "$f" ]; then
-            curl -X POST -F "instance_id={instance_id}" -F "csv_filename=$(basename "$f")" -F "csv_file=@$f" http://{controller_ip}:{controller_port}{CSV_ENDPOINT} || true
-            send_log "Uploaded CSV: $(basename "$f")"
-        fi
+        [ -f "$f" ] && curl -X POST -F "instance_id={instance_id}" -F "csv_filename=$(basename "$f")" -F "csv_file=@$f" http://{controller_ip}:{controller_port}{CSV_ENDPOINT} 2>/dev/null
     done
 }}
 
-# Continuous CSV monitoring and upload (runs in background)
-monitor_and_upload_csv() {{
-    FILE_STATES_LIST="/tmp/csv_file_states.txt"
-    touch "$FILE_STATES_LIST"
-    
+monitor_csv() {{
     while true; do
-        # Find all CSV files in the project directory
-        find {BITTORRENT_PROJECT_DIR} -name "*.csv" -type f | while read csv_file; do
-            if [ -f "$csv_file" ]; then
-                csv_filename=$(basename "$csv_file")
-                csv_full_path=$(realpath "$csv_file")
-                
-                # Get current modification time and size
-                current_stat=$(stat -f "%m %z" "$csv_file" 2>/dev/null || stat -c "%Y %s" "$csv_file" 2>/dev/null || echo "0 0")
-                
-                # Check if this file's state has changed
-                previous_stat=$(grep "^$csv_full_path " "$FILE_STATES_LIST" 2>/dev/null | cut -d' ' -f2- || echo "")
-                
-                if [ "$current_stat" != "$previous_stat" ]; then
-                    # File is new or has been modified - upload it
-                    if curl -X POST -F "instance_id={instance_id}" -F "csv_filename=$csv_filename" -F "csv_file=@$csv_file" http://{controller_ip}:{controller_port}{CSV_ENDPOINT} 2>/dev/null; then
-                        # Update the state tracking
-                        # Remove old entry if exists
-                        grep -v "^$csv_full_path " "$FILE_STATES_LIST" > "$FILE_STATES_LIST.tmp" 2>/dev/null || touch "$FILE_STATES_LIST.tmp"
-                        # Add new entry
-                        echo "$csv_full_path $current_stat" >> "$FILE_STATES_LIST.tmp"
-                        mv "$FILE_STATES_LIST.tmp" "$FILE_STATES_LIST"
-                        
-                        if [ -z "$previous_stat" ]; then
-                            send_log "New CSV detected and uploaded: $csv_filename"
-                        else
-                            send_log "CSV updated and re-uploaded: $csv_filename"
-                        fi
-                    fi
-                fi
-            fi
+        find {BITTORRENT_PROJECT_DIR} -name "*.csv" -type f | while read f; do
+            [ -f "$f" ] && curl -X POST -F "instance_id={instance_id}" -F "csv_filename=$(basename "$f")" -F "csv_file=@$f" http://{controller_ip}:{controller_port}{CSV_ENDPOINT} 2>/dev/null
         done
-        
-        # Wait 5 seconds before next check
         sleep 5
     done
 }}
 
 cleanup() {{
-    send_log "Instance {instance_id} shutting down"
-    
-    # Stop background CSV monitoring if running
-    if [ ! -z "$CSV_MONITOR_PID" ]; then
-        kill $CSV_MONITOR_PID 2>/dev/null || true
-    fi
-    
-    # Final CSV collection (in case any were missed)
+    [ ! -z "$CSV_PID" ] && kill $CSV_PID 2>/dev/null
     upload_csv
-    
-    [ -f {LOG_FILE_PATH} ] && curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
-    curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "interrupted"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT} || true
+    [ -f {LOG_FILE_PATH} ] && curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
+    curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "interrupted"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT}
 }}
 
 trap cleanup EXIT TERM INT
 
-echo "=== Starting {instance_id} ({role}) ==="
-send_log "Instance {instance_id} starting setup (Role: {role})"
+send_log "Starting {instance_id} ({role})"
 
-echo "=== System Update ==="
-send_log "Starting system update..."
-{UPDATE_CMD}
-send_log "System update completed"
+# System setup
+{UPDATE_CMD} && {INSTALL_PACKAGES_CMD} tree
 
-echo "=== Installing Packages ==="
-send_log "Installing system packages..."
-{INSTALL_PACKAGES_CMD} tree
-send_log "System packages installation completed"
-
-echo "=== Network Configuration ==="
-send_log "Configuring network settings..."
+# Network
 PUBLIC_IP=$(curl -s https://api.ipify.org || echo "unknown")
-PRIVATE_IP=$(hostname -I | awk '{{print $1}}' || echo "unknown")
-send_log "Network - Public IP: $PUBLIC_IP, Private IP: $PRIVATE_IP"
+iptables -F 2>/dev/null; iptables -P INPUT ACCEPT 2>/dev/null; iptables -P OUTPUT ACCEPT 2>/dev/null
+send_log "Network: $PUBLIC_IP"
 
-# Configure iptables
-iptables -F 2>/dev/null || true
-iptables -P INPUT ACCEPT 2>/dev/null || true
-iptables -P OUTPUT ACCEPT 2>/dev/null || true
-send_log "Network configuration completed"
-
-echo "=== Cloning Repository ==="
-send_log "Cloning repository from {github_repo}"
+# Clone and install
 git clone -b feat/distribed {github_repo} {BITTORRENT_PROJECT_DIR}
-send_log "Repository cloned successfully"
-
-echo "=== Installing Dependencies ==="
 cd {BITTORRENT_PROJECT_DIR}
-send_log "Starting Python dependencies installation..."
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt --timeout 300
-PIP_EXIT=$?
-if [ $PIP_EXIT -ne 0 ]; then
-    send_log "ERROR: pip install failed"
-    exit 1
-fi
-send_log "Python dependencies installation completed"
+python3 -m pip install --upgrade pip && python3 -m pip install -r requirements.txt --timeout 300
 
-echo "=== Downloading Files ==="
+# Download files
 mkdir -p {TORRENT_TEMP_DIR}
-send_log "Downloading torrent file..."
-
-# Download torrent file with validation and retry logic
-TORRENT_PATH="{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
-TORRENT_DOWNLOAD_SUCCESS=false
-
-for attempt in 1 2 3; do
-    echo "Torrent download attempt $attempt/3..."
-    send_log "Torrent download attempt $attempt/3 from {torrent_url}"
-    
-    # Download with verbose output and follow redirects
-    HTTP_CODE=$(curl -L -w "%{{http_code}}" -H "User-Agent: BitTorrent-Client/1.0" -o "$TORRENT_PATH" "{torrent_url}" 2>/dev/null)
-    CURL_EXIT=$?
-    
-    echo "HTTP response code: $HTTP_CODE"
-    echo "Curl exit code: $CURL_EXIT"
-    
-    if [ $CURL_EXIT -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
-        # Check if file exists and has reasonable size
-        if [ -f "$TORRENT_PATH" ]; then
-            TORRENT_SIZE=$(stat -f%z "$TORRENT_PATH" 2>/dev/null || stat -c%s "$TORRENT_PATH" 2>/dev/null || echo "0")
-            echo "Downloaded torrent file size: $TORRENT_SIZE bytes"
-            
-            if [ "$TORRENT_SIZE" -gt 50 ]; then
-                # Check if it looks like a torrent file (starts with 'd' for dictionary)
-                FIRST_CHAR=$(head -c 1 "$TORRENT_PATH" 2>/dev/null || echo "")
-                if [ "$FIRST_CHAR" = "d" ]; then
-                    echo "✓ Torrent file appears valid (size: $TORRENT_SIZE bytes, starts with 'd')"
-                    send_log "Torrent file download successful: $TORRENT_SIZE bytes"
-                    TORRENT_DOWNLOAD_SUCCESS=true
-                    break
-                else
-                    echo "✗ File doesn't appear to be a torrent (first char: '$FIRST_CHAR')"
-                    echo "File content preview:"
-                    head -c 100 "$TORRENT_PATH" 2>/dev/null || echo "Could not read file"
-                fi
-            else
-                echo "✗ File too small: $TORRENT_SIZE bytes"
-                echo "File content:"
-                cat "$TORRENT_PATH" 2>/dev/null || echo "Could not read file"
-            fi
-        else
-            echo "✗ File not created"
-        fi
-    else
-        echo "✗ Download failed - HTTP: $HTTP_CODE, Curl exit: $CURL_EXIT"
-    fi
-    
-    if [ $attempt -lt 3 ]; then
-        echo "Retrying in 3 seconds..."
-        sleep 3
-    fi
-done
-
-if [ "$TORRENT_DOWNLOAD_SUCCESS" = "false" ]; then
-    send_log "ERROR: Failed to download valid torrent file after 3 attempts"
-    echo "ERROR: Could not download torrent file from {torrent_url}"
-    echo "Final file state:"
-    ls -la "$TORRENT_PATH" 2>/dev/null || echo "File does not exist"
-    exit 1
-fi
-
-send_log "Torrent file download completed successfully"
-
-# Role-specific setup
-if [ "{role}" == "{ROLE_SEEDER}" ]; then
-    send_log "Seeder downloading seed file to project directory..."
-    SEED_FILE=$(basename "{seed_fileurl}")
-    [ -z "$SEED_FILE" ] && SEED_FILE="{SEED_FILENAME}"
-    
-    echo "Downloading seed file: $SEED_FILE from {seed_fileurl}"
-    SEED_DOWNLOAD_SUCCESS=false
-    
-    for attempt in 1 2 3; do
-        echo "Seed file download attempt $attempt/3..."
-        send_log "Seed file download attempt $attempt/3"
-        
-        HTTP_CODE=$(curl -L -w "%{{http_code}}" -H "User-Agent: BitTorrent-Client/1.0" -o "$SEED_FILE" "{seed_fileurl}" 2>/dev/null)
-        CURL_EXIT=$?
-        
-        echo "HTTP response code: $HTTP_CODE"
-        echo "Curl exit code: $CURL_EXIT"
-        
-        if [ $CURL_EXIT -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
-            if [ -f "$SEED_FILE" ]; then
-                SEED_SIZE=$(stat -f%z "$SEED_FILE" 2>/dev/null || stat -c%s "$SEED_FILE" 2>/dev/null || echo "0")
-                echo "Downloaded seed file size: $SEED_SIZE bytes"
-                
-                if [ "$SEED_SIZE" -gt 0 ]; then
-                    echo "✓ Seed file download successful: $SEED_FILE ($SEED_SIZE bytes)"
-                    send_log "Seed file downloaded successfully: $SEED_FILE ($SEED_SIZE bytes)"
-                    SEED_DOWNLOAD_SUCCESS=true
-                    break
-                else
-                    echo "✗ Seed file is empty"
-                fi
-            else
-                echo "✗ Seed file not created"
-            fi
-        else
-            echo "✗ Seed file download failed - HTTP: $HTTP_CODE, Curl exit: $CURL_EXIT"
-        fi
-        
-        if [ $attempt -lt 3 ]; then
-            echo "Retrying in 3 seconds..."
-            sleep 3
-        fi
-    done
-    
-    if [ "$SEED_DOWNLOAD_SUCCESS" = "false" ]; then
-        send_log "ERROR: Failed to download seed file after 3 attempts"
-        echo "ERROR: Could not download seed file from {seed_fileurl}"
-        exit 1
-    fi
-else
-    send_log "Leecher setup - will download via BitTorrent"
-fi
-
-echo "=== Environment Setup ==="
-export BITTORRENT_ROLE="{role}"
-export INSTANCE_ID="{instance_id}"
-export PUBLIC_IP="$PUBLIC_IP"
-export BITTORRENT_PORT=6881
-export BITTORRENT_BIND_IP="0.0.0.0"
-export BITTORRENT_ANNOUNCE_IP="$PUBLIC_IP"
-send_log "BitTorrent environment configured - Role: {role}, Port: 6881"
-
-echo "=== Setup Completed ==="
-send_log "Setup completed - waiting for coordinated start signal..."
-curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}"}}' http://{controller_ip}:{controller_port}{SETUP_COMPLETE_ENDPOINT}
-
-echo "=== Waiting for Start Signal ==="
-send_log "Waiting for start signal from controller..."
-while true; do
-    RESPONSE=$(curl -s http://{controller_ip}:{controller_port}{START_SIGNAL_ENDPOINT}?instance_id={instance_id})
-    START_SIGNAL=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('start', False))" 2>/dev/null || echo "False")
-    
-    if [ "$START_SIGNAL" = "True" ]; then
-        break
-    fi
+for i in 1 2 3; do
+    curl -L -o {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} {torrent_url} && [ -f {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} ] && break
     sleep 2
 done
 
-echo "=== Start Signal Received ==="
-send_log "Start signal received - beginning BitTorrent execution..."
-
-# Start background CSV monitoring (checks every 5 seconds)
-monitor_and_upload_csv &
-CSV_MONITOR_PID=$!
-send_log "Started continuous CSV monitoring (PID: $CSV_MONITOR_PID)"
-
-# Start log streaming
-tail -f /tmp/startup.log | while read line; do send_log "STARTUP: $line"; sleep 0.5; done &
-
-echo "=== Directory Structure Verification ===" >> {LOG_FILE_PATH}
-echo "Current working directory: $(pwd)" >> {LOG_FILE_PATH}
-echo "Directory tree before BitTorrent execution:" >> {LOG_FILE_PATH}
-tree . >> {LOG_FILE_PATH} 2>&1
-echo "" >> {LOG_FILE_PATH}
-echo "Torrent temp directory contents:" >> {LOG_FILE_PATH}
-ls -la {TORRENT_TEMP_DIR}/ >> {LOG_FILE_PATH} 2>&1
-echo "" >> {LOG_FILE_PATH}
-echo "Torrent file validation details:" >> {LOG_FILE_PATH}
-if [ -f "{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}" ]; then
-    echo "Torrent file size: $(stat -f%z '{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}' 2>/dev/null || stat -c%s '{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}' 2>/dev/null || echo 'unknown') bytes" >> {LOG_FILE_PATH}
-    echo "Torrent file first 50 bytes (hex):" >> {LOG_FILE_PATH}
-    xxd -l 50 "{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}" >> {LOG_FILE_PATH} 2>&1 || echo "Could not read torrent file with xxd" >> {LOG_FILE_PATH}
-    echo "Torrent file first line (text):" >> {LOG_FILE_PATH}
-    head -n 1 "{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}" >> {LOG_FILE_PATH} 2>&1 || echo "Could not read torrent file as text" >> {LOG_FILE_PATH}
-else
-    echo "ERROR: Torrent file not found!" >> {LOG_FILE_PATH}
-fi
-echo "========================================" >> {LOG_FILE_PATH}
-
-echo "=== Starting BitTorrent Client ==="
-send_log "Starting BitTorrent client from project directory..."
-
-# Final validation of torrent file before execution
-echo "Final torrent file validation..."
-TORRENT_PATH="{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
-if [ ! -f "$TORRENT_PATH" ]; then
-    send_log "ERROR: Torrent file missing at execution time"
-    echo "ERROR: Torrent file not found: $TORRENT_PATH"
-    exit 1
-fi
-
-FINAL_TORRENT_SIZE=$(stat -f%z "$TORRENT_PATH" 2>/dev/null || stat -c%s "$TORRENT_PATH" 2>/dev/null || echo "0")
-echo "Final torrent file size: $FINAL_TORRENT_SIZE bytes"
-if [ "$FINAL_TORRENT_SIZE" -lt 50 ]; then
-    send_log "ERROR: Torrent file too small at execution time ($FINAL_TORRENT_SIZE bytes)"
-    echo "ERROR: Torrent file appears corrupted (size: $FINAL_TORRENT_SIZE bytes)"
-    echo "File content:"
-    cat "$TORRENT_PATH" 2>/dev/null || echo "Could not read file"
-    exit 1
-fi
-
-echo "✓ Torrent file validation passed"
-send_log "Torrent file validation passed - ready to start BitTorrent"
-
+# Role setup
 if [ "{role}" == "{ROLE_SEEDER}" ]; then
-    send_log "Starting BitTorrent client as SEEDER"
+    SEED_FILE=$(basename "{seed_fileurl}")
+    [ -z "$SEED_FILE" ] && SEED_FILE="{SEED_FILENAME}"
+    for i in 1 2 3; do
+        curl -L -o "$SEED_FILE" {seed_fileurl} && [ -f "$SEED_FILE" ] && break
+        sleep 2
+    done
+fi
+
+# Environment
+export BITTORRENT_ROLE="{role}" INSTANCE_ID="{instance_id}" PUBLIC_IP="$PUBLIC_IP" BITTORRENT_PORT=6881
+
+# Setup complete
+send_log "Setup complete"
+curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}"}}' http://{controller_ip}:{controller_port}{SETUP_COMPLETE_ENDPOINT}
+
+# Wait for start
+while true; do
+    RESP=$(curl -s http://{controller_ip}:{controller_port}{START_SIGNAL_ENDPOINT}?instance_id={instance_id})
+    [ "$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('start',False))" 2>/dev/null)" = "True" ] && break
+    sleep 2
+done
+
+send_log "Starting BitTorrent"
+
+# Start CSV monitoring
+monitor_csv & 
+CSV_PID=$!
+
+# Log directory structure
+echo "=== Directory Structure ===" >> {LOG_FILE_PATH}
+tree . >> {LOG_FILE_PATH} 2>&1
+ls -la {TORRENT_TEMP_DIR}/ >> {LOG_FILE_PATH} 2>&1
+
+# Start BitTorrent
+if [ "{role}" == "{ROLE_SEEDER}" ]; then
     python3 -m main -s {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
 else
-    send_log "Starting BitTorrent client as LEECHER"
     python3 -m main {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} > {LOG_FILE_PATH} 2>&1
 fi
 
-echo "=== BitTorrent Completed ==="
-send_log "BitTorrent client finished"
-
-# Stop background CSV monitoring
-if [ ! -z "$CSV_MONITOR_PID" ]; then
-    kill $CSV_MONITOR_PID 2>/dev/null || true
-    send_log "Stopped continuous CSV monitoring"
-fi
-
-# Stop log streaming
-pkill -f "tail -f" 2>/dev/null || true
-
-echo "=== Final Steps ==="
-send_log "Final CSV collection (continuous monitoring was active during execution)..."
+send_log "BitTorrent finished"
+kill $CSV_PID 2>/dev/null
 upload_csv
-send_log "Sending final logs to controller..."
 curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
 curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "{STATUS_COMPLETE}"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT}
 
-send_log "Instance setup completed, shutting down..."
 trap - EXIT TERM INT
 {SHUTDOWN_CMD}
 """
@@ -1422,7 +1179,7 @@ class BitTorrentDeployer:
             print("⚙️  All instances completed setup and received coordinated start signals")
             print("📥 Leechers started first with staggered timing")
             print("🌱 Seeders started in parallel after leechers were established")  
-            print("📊 CSV files will be automatically collected after BitTorrent completion")
+            print("📊 CSV files are being streamed live every 5 seconds during execution")
             print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes for all to complete...")
             print(f"📁 Logs being saved to: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             print(f"📊 CSV files being saved to: {COLOR_CYAN}{LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
