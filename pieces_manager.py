@@ -234,4 +234,4 @@ class PiecesManager:
                 if piece.try_commit():
                     self.bitfield[piece.piece_index] = 1
     
-    
+        logging.info(f"PiecesManager: Initial bitfield loaded from disk is {self.bitfield}") 

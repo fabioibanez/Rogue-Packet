@@ -27,11 +27,14 @@ from pubsub import pub
 import logging
 import errno
 import socket
+import os
+import time
 
+time_start = time.monotonic() # Global start time for logging
 
 K_MINUS_1 = 3
 class PeersManager(Thread):    
-    def __init__(self, torrent: Torrent) -> None:
+    def __init__(self, torrent: Torrent, torrent_dir: str) -> None:
         Thread.__init__(self)
         self.peers: list[Peer] = []  # List of connected peers
 
@@ -42,7 +45,7 @@ class PeersManager(Thread):
 
         self.torrent = torrent  # Torrent metadata
         self.is_active: bool = True  # Controls the main thread loop
-
+        self.torrent_dir = torrent_dir
         # Initialize the choking logger
         self.choking_logger = PeerChokingLogger()
 
@@ -90,6 +93,10 @@ class PeersManager(Thread):
             # If after completing a piece, the peer no longer has anything to offer, send a NOT INTERESTED message
             if peer.am_interested() and sum(~bitfield & peer.bitfield) == 0:
                 peer.send_to_peer(NotInterested())
+
+        size_of_file = os.path.getsize(self.torrent_dir)
+        elapsed_time = time.monotonic() - time_start
+        logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
                 
     def get_random_peer_having_piece(self, piece_index: int) -> Peer | None:
         ready_peers = []
