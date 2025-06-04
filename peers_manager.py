@@ -14,9 +14,6 @@ import random
 from typing import Iterable
 
 from bitstring import BitArray
-
-
-from pieces_manager import PiecesManager
 from torrent import Torrent
 from peer_choking_logger import PeerChokingLogger
 from message import Message, Handshake, KeepAlive, Choke, UnChoke, Interested, NotInterested, Have, BitField, Request, PieceMessage, Cancel, Port
@@ -34,8 +31,7 @@ import socket
 
 K_MINUS_1 = 3
 class PeersManager(Thread):    
-    def __init__(self, torrent: Torrent,
-                 pieces_manager: PiecesManager) -> None:
+    def __init__(self, torrent: Torrent) -> None:
         Thread.__init__(self)
         self.peers: list[Peer] = []  # List of connected peers
 
@@ -45,7 +41,6 @@ class PeersManager(Thread):
         self.unchoked_optimistic_peer: Peer | None = None
 
         self.torrent = torrent  # Torrent metadata
-        self.pieces_manager = pieces_manager  # Manages pieces/blocks
         self.is_active: bool = True  # Controls the main thread loop
 
         # Initialize the choking logger
@@ -60,6 +55,10 @@ class PeersManager(Thread):
         return sum(peer.stats.calculate_download_rate() for peer in unchoked_peers)
 
     def confirm_send_to_peer(self, peer: Peer) -> bool:
+        if peer == self.unchoked_optimistic_peer:
+            print(f"confirm_send_to_peer :: {peer}: [optimistic]")
+            return True
+
         # We only send a packet to a peer with probability:
         # (peer.download_rate / max_collective_download_rate)
         denom = self.max_collective_download_rate
@@ -76,6 +75,7 @@ class PeersManager(Thread):
                     peer.ip, peer_rate, denom, probability, should_send)
         
         return should_send
+
 
     def broadcast_have(self, piece_index: int, bitfield: BitArray) -> None:
         have_message = Have(piece_index)
@@ -285,17 +285,16 @@ class PeersManager(Thread):
                 self.choking_logger.log_regular_unchoke(peer)
     
     def update_unchoked_optimistic_peers(self) -> None:
-        eligible_peers = [peer for peer in self.peers if peer.is_interested() and peer.am_choking()]
-        if not eligible_peers:
-            logging.info("\033[1;35m[Optimistic unchoking] No eligible peers\033[0m")
+        if not self.peers:
+            logging.info(f"\033[1;35m[Optimistic unchoking] No eligible peers\033[0m")
             return
         
         # Choke the old optimistically unchoked peer
-        if self.unchoked_optimistic_peer is not None:
+        if self.unchoked_optimistic_peer is not None and self.unchoked_optimistic_peer not in self.unchoked_peers:
             self.unchoked_optimistic_peer.send_to_peer(Choke())
             self.choking_logger.log_optimistic_choke(self.unchoked_optimistic_peer)
         
-        lucky_peer = random.choice(eligible_peers)
+        lucky_peer = random.choice(self.peers)
         lucky_peer.send_to_peer(UnChoke())
         self.unchoked_optimistic_peer = lucky_peer
         
