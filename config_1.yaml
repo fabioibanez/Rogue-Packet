@@ -10,5 +10,5 @@ controller:
 regions:
 - leechers: 1
   name: us-west-1
-  seeders: 1
+  seeders: 3
 timeout_minutes: 30
