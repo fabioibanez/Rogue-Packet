@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Enhanced BitTorrent Network Deployment Script with Two-Phase Deployment
+Enhanced BitTorrent Network Deployment Script with Two-Phase Deployment and Branch Distribution
 - Phase 1: Deploy all instances first and wait for them to be ready
 - Phase 2: Deploy leechers after instances are serving
 - Uses SCP to collect stripped project directories from BitTorrent clients
+- Supports proportional distribution of different BitTorrent branches among leechers
 """
 
 # Timing Constants for Coordinated Startup
@@ -124,6 +125,15 @@ class Config:
     def get_timeout_minutes(self):
         return self.data['timeout_minutes']
 
+    def get_propshare_branch(self):
+        return self.data['bittorrent'].get('propshare_branch', 'feat/proportional-share')
+    
+    def get_baseline_branch(self):
+        return self.data['bittorrent'].get('baseline_branch', 'baseline-logging')
+    
+    def get_proportion_propshare(self):
+        return self.data['bittorrent'].get('proportion_propshare', 0.5)
+
 class LogHandler(BaseHTTPRequestHandler):
     logs_dir = LOGS_DIR
     completion_status = {}
@@ -211,7 +221,12 @@ class LogHandler(BaseHTTPRequestHandler):
                 print(f"  {COLOR_BLUE}📥 Leechers:{COLOR_RESET}")
                 for instance_id, info in roles['leechers']:
                     status_emoji, status_text = cls._get_status_display(info['status'], info.get('progress'))
-                    print(f"    {status_emoji} {instance_id}: {status_text}")
+                    branch_indicator = ""
+                    if "propshare" in instance_id:
+                        branch_indicator = f" {COLOR_GREEN}[PS]{COLOR_RESET}"
+                    elif "baseline" in instance_id:
+                        branch_indicator = f" {COLOR_BLUE}[BL]{COLOR_RESET}"
+                    print(f"    {status_emoji} {instance_id}: {status_text}{branch_indicator}")
         
         # Summary
         total_instances = len(cls.instance_status)
@@ -220,6 +235,7 @@ class LogHandler(BaseHTTPRequestHandler):
         
         print(f"\n{COLOR_BOLD}📊 Summary:{COLOR_RESET}")
         print(f"  Total: {total_instances} | Running: {running_count} | Completed: {completed_count}")
+        print(f"  {COLOR_GREEN}[PS] = Proportional Share{COLOR_RESET} | {COLOR_BLUE}[BL] = Baseline{COLOR_RESET}")
     
     @classmethod 
     def _get_status_display(cls, status, progress=None):
@@ -336,10 +352,19 @@ class LogHandler(BaseHTTPRequestHandler):
         if instance_id and log_data:
             run_dir = os.path.join(self.logs_dir, self.run_name)
             os.makedirs(run_dir, exist_ok=True)
-            log_path = os.path.join(run_dir, f"{instance_id}.log")
+            
+            # Add branch name to log filename for leechers
+            log_filename = f"{instance_id}.log"
+            if 'leecher' in instance_id:
+                if 'propshare' in instance_id:
+                    log_filename = f"{instance_id}-feat-proportional-share.log"
+                elif 'baseline' in instance_id:
+                    log_filename = f"{instance_id}-baseline-logging.log"
+            
+            log_path = os.path.join(run_dir, log_filename)
             with open(log_path, 'wb') as f:
                 f.write(log_data)
-            print(f"{COLOR_GREEN}📝 Final log received from {instance_id}{COLOR_RESET}")
+            print(f"{COLOR_GREEN}📝 Final log received from {instance_id} -> {log_filename}{COLOR_RESET}")
         
         self.send_response(HTTP_OK)
         self.end_headers()
@@ -359,7 +384,16 @@ class LogHandler(BaseHTTPRequestHandler):
                 # Save to log file
                 run_dir = os.path.join(self.logs_dir, self.run_name)
                 os.makedirs(run_dir, exist_ok=True)
-                log_path = os.path.join(run_dir, f"{instance_id}_stream.log")
+                
+                # Add branch name to streaming log filename for leechers
+                log_filename = f"{instance_id}_stream.log"
+                if 'leecher' in instance_id:
+                    if 'propshare' in instance_id:
+                        log_filename = f"{instance_id}-feat-proportional-share_stream.log"
+                    elif 'baseline' in instance_id:
+                        log_filename = f"{instance_id}-baseline-logging_stream.log"
+                
+                log_path = os.path.join(run_dir, log_filename)
                 
                 with open(log_path, 'a') as f:
                     f.write(f"[{datetime.fromtimestamp(timestamp).strftime('%H:%M:%S')}] {log_chunk}\n")
@@ -634,7 +668,30 @@ class AWSManager:
         except Exception as e:
             return None, f"Failed to lookup AMI in {region}: {str(e)}"
     
-    def generate_user_data(self, github_repo, torrent_url, seed_fileurl, role, controller_ip, controller_port, instance_id, public_key):
+    def determine_leecher_branch(self, region_config, leecher_index, proportion_propshare, propshare_branch, baseline_branch):
+        """
+        Determine which branch a specific leecher should use based on proportion
+        
+        Args:
+            region_config: Region configuration with leecher count
+            leecher_index: Index of the current leecher (0-based)
+            proportion_propshare: Float between 0-1 for proportion using propshare
+            propshare_branch: Name of the proportional share branch
+            baseline_branch: Name of the baseline branch
+        
+        Returns:
+            str: Branch name to use for this leecher
+        """
+        total_leechers = region_config['leechers']
+        propshare_count = round(total_leechers * proportion_propshare)
+        
+        # First propshare_count leechers use propshare branch, rest use baseline
+        if leecher_index < propshare_count:
+            return propshare_branch
+        else:
+            return baseline_branch
+    
+    def generate_user_data(self, github_repo, torrent_url, seed_fileurl, role, controller_ip, controller_port, instance_id, public_key, branch="vplex-final"):
         script = f"""#!/bin/bash
 set -x
 exec > >(tee -a /tmp/startup.log) 2>&1
@@ -708,7 +765,7 @@ cleanup() {{
 trap cleanup EXIT TERM INT
 
 echo "=== Starting {instance_id} ({role}) ==="
-send_log "Instance {instance_id} starting setup (Role: {role})"
+send_log "Instance {instance_id} starting setup (Role: {role}, Branch: {branch})"
 
 echo "=== System Update ==="
 send_log "Starting system update..."
@@ -746,9 +803,9 @@ iptables -P OUTPUT ACCEPT 2>/dev/null || true
 send_log "Network configuration completed"
 
 echo "=== Cloning Repository ==="
-send_log "Cloning repository from {github_repo}"
-git clone -b vplex-final {github_repo} {BITTORRENT_PROJECT_DIR}
-send_log "Repository cloned successfully"
+send_log "Cloning repository from {github_repo} (branch: {branch})"
+git clone -b {branch} {github_repo} {BITTORRENT_PROJECT_DIR}
+send_log "Repository cloned successfully from branch: {branch}"
 
 echo "=== Installing Dependencies ==="
 cd {BITTORRENT_PROJECT_DIR}
@@ -790,7 +847,7 @@ export PUBLIC_IP="$PUBLIC_IP"
 export BITTORRENT_PORT=6881
 export BITTORRENT_BIND_IP="0.0.0.0"
 export BITTORRENT_ANNOUNCE_IP="$PUBLIC_IP"
-send_log "BitTorrent environment configured - Role: {role}, Port: 6881"
+send_log "BitTorrent environment configured - Role: {role}, Port: 6881, Branch: {branch}"
 
 echo "=== Setup Completed ==="
 send_log "Setup completed - waiting for coordinated start signal..."
@@ -934,7 +991,13 @@ class BitTorrentDeployer:
                         if file.endswith('.log'):
                             file_path = os.path.join(run_dir, file)
                             file_size = os.path.getsize(file_path)
-                            print(f"{COLOR_GREEN}📝 {file} ({file_size} bytes){COLOR_RESET}")
+                            # Show branch type in emergency log summary
+                            branch_info = ""
+                            if "feat-proportional-share" in file:
+                                branch_info = f" {COLOR_GREEN}[feat/proportional-share]{COLOR_RESET}"
+                            elif "baseline-logging" in file:
+                                branch_info = f" {COLOR_BLUE}[baseline-logging]{COLOR_RESET}"
+                            print(f"{COLOR_GREEN}📝 {file} ({file_size} bytes){branch_info}{COLOR_RESET}")
                 
                 # Show project files collected
                 files_dir = os.path.join(run_dir, "project_files")
@@ -999,11 +1062,24 @@ class BitTorrentDeployer:
         files_dir = os.path.join(run_dir, "project_files")
         os.makedirs(files_dir, exist_ok=True)
         
-        # Create individual directories for each instance
+        # Create individual directories for each leecher instance (with branch tags)
+        propshare_branch = self.config.get_propshare_branch()
+        baseline_branch = self.config.get_baseline_branch()
+        proportion_propshare = self.config.get_proportion_propshare()
+        
         for region in self.config.get_regions():
-            for i in range(region['leechers']):  # Only leechers transfer files
-                instance_id = f"{region['name']}-{ROLE_LEECHER}-{i}"
-                instance_dir = os.path.join("/tmp", f"{instance_id}_files")
+            for i in range(region['leechers']):
+                # Determine branch for this leecher
+                total_leechers = region['leechers']
+                propshare_count = round(total_leechers * proportion_propshare)
+                
+                if i < propshare_count:
+                    branch_tag = "propshare"
+                else:
+                    branch_tag = "baseline"
+                
+                instance_id_with_branch = f"{region['name']}-{ROLE_LEECHER}-{i}-{branch_tag}"
+                instance_dir = os.path.join("/tmp", f"{instance_id_with_branch}_files")
                 os.makedirs(instance_dir, exist_ok=True)
         
         print(f"{COLOR_GREEN}✓ SCP collection directories prepared{COLOR_RESET}")
@@ -1015,15 +1091,28 @@ class BitTorrentDeployer:
         run_dir = os.path.join(LOGS_DIR, self.run_name)
         files_dir = os.path.join(run_dir, "project_files")
         
+        propshare_branch = self.config.get_propshare_branch()
+        baseline_branch = self.config.get_baseline_branch()
+        proportion_propshare = self.config.get_proportion_propshare()
+        
         total_files = 0
         for region in self.config.get_regions():
             for i in range(region['leechers']):
-                instance_id = f"{region['name']}-{ROLE_LEECHER}-{i}"
-                temp_dir = f"/tmp/{instance_id}_files"
+                # Determine branch for this leecher (same logic as deployment)
+                total_leechers = region['leechers']
+                propshare_count = round(total_leechers * proportion_propshare)
+                
+                if i < propshare_count:
+                    branch_tag = "propshare"
+                else:
+                    branch_tag = "baseline"
+                
+                instance_id_with_branch = f"{region['name']}-{ROLE_LEECHER}-{i}-{branch_tag}"
+                temp_dir = f"/tmp/{instance_id_with_branch}_files"
                 
                 if os.path.exists(temp_dir):
                     # Move to permanent location
-                    final_dir = os.path.join(files_dir, instance_id)
+                    final_dir = os.path.join(files_dir, instance_id_with_branch)
                     if not os.path.exists(final_dir):
                         subprocess.run(['mv', temp_dir, final_dir], check=False)
                         
@@ -1031,7 +1120,7 @@ class BitTorrentDeployer:
                         if os.path.exists(final_dir):
                             file_count = len([f for f in os.listdir(final_dir) if os.path.isfile(os.path.join(final_dir, f))])
                             total_files += file_count
-                            print(f"{COLOR_GREEN}✓ Collected {file_count} files from {instance_id}{COLOR_RESET}")
+                            print(f"{COLOR_GREEN}✓ Collected {file_count} files from {instance_id_with_branch}{COLOR_RESET}")
         
         print(f"{COLOR_CYAN}📁 Total files collected: {total_files}{COLOR_RESET}")
         return total_files
@@ -1061,9 +1150,15 @@ class BitTorrentDeployer:
         return region_ami_map, None
     
     def deploy_region(self, region_config, torrent_url, seed_fileurl, ami_id, public_key):
-        """Deploy all instances (seeders and leechers) for this region"""
+        """Deploy all instances (seeders and leechers) for this region with branch distribution"""
         region_name = region_config['name']
         instance_ids = []
+        
+        # Get branch configuration
+        propshare_branch = self.config.get_propshare_branch()
+        baseline_branch = self.config.get_baseline_branch()
+        proportion_propshare = self.config.get_proportion_propshare()
+        github_repo = self.config.get_bittorrent_config()['github_repo']
         
         # Create simple All-All security group for this region
         security_group_id, sg_error = self.aws_manager.create_simple_security_group(region_name)
@@ -1073,39 +1168,59 @@ class BitTorrentDeployer:
         
         print(f"{COLOR_GREEN}✓ Created All-All security group {security_group_id} in {region_name}{COLOR_RESET}")
         
-        # Deploy seeders
+        # Deploy seeders (always use vplex-final branch)
         for i in range(region_config['seeders']):
             instance_id = f"{region_name}-{ROLE_SEEDER}-{i}"
             user_data = self.aws_manager.generate_user_data(
-                self.config.get_bittorrent_config()['github_repo'],
+                github_repo,
                 torrent_url,
                 seed_fileurl,
                 ROLE_SEEDER,
                 self.controller_ip,
                 self.config.get_controller_port(),
                 instance_id,
-                public_key
+                public_key,
+                branch="vplex-final"  # Seeders always use the main branch
             )
             
             ec2_id = self.aws_manager.launch_instance(region_name, user_data, ami_id, security_group_id)
             instance_ids.append(ec2_id)
         
-        # Deploy leechers
+        # Deploy leechers with branch distribution
+        total_leechers = region_config['leechers']
+        propshare_count = round(total_leechers * proportion_propshare)
+        baseline_count = total_leechers - propshare_count
+        
+        print(f"{COLOR_CYAN}📊 Leecher branch distribution in {region_name}:{COLOR_RESET}")
+        print(f"  {COLOR_GREEN}🔀 Proportional Share ({propshare_branch}): {propshare_count}/{total_leechers} leechers{COLOR_RESET}")
+        print(f"  {COLOR_BLUE}📊 Baseline ({baseline_branch}): {baseline_count}/{total_leechers} leechers{COLOR_RESET}")
+        
         for i in range(region_config['leechers']):
+            # Determine which branch this leecher should use
+            branch = self.aws_manager.determine_leecher_branch(
+                region_config, i, proportion_propshare, propshare_branch, baseline_branch
+            )
+            
             instance_id = f"{region_name}-{ROLE_LEECHER}-{i}"
+            branch_tag = "propshare" if branch == propshare_branch else "baseline"
+            instance_id_with_branch = f"{region_name}-{ROLE_LEECHER}-{i}-{branch_tag}"
+            
             user_data = self.aws_manager.generate_user_data(
-                self.config.get_bittorrent_config()['github_repo'],
+                github_repo,
                 torrent_url,
                 seed_fileurl,
                 ROLE_LEECHER,
                 self.controller_ip,
                 self.config.get_controller_port(),
-                instance_id,
-                public_key
+                instance_id_with_branch,  # Include branch info in instance ID
+                public_key,
+                branch=branch  # Use the determined branch
             )
             
             ec2_id = self.aws_manager.launch_instance(region_name, user_data, ami_id, security_group_id)
             instance_ids.append(ec2_id)
+            
+            print(f"  {COLOR_CYAN}📥 {instance_id_with_branch}: using branch '{branch}'{COLOR_RESET}")
         
         return region_name, instance_ids
     
@@ -1157,7 +1272,13 @@ class BitTorrentDeployer:
             if self.cleanup_in_progress:
                 return False
             
-            print(f"{COLOR_BLUE}📥 Starting leecher {i+1}/{len(leecher_instances)}: {leecher_id}{COLOR_RESET}")
+            branch_info = ""
+            if "propshare" in leecher_id:
+                branch_info = f" {COLOR_GREEN}[Propshare]{COLOR_RESET}"
+            elif "baseline" in leecher_id:
+                branch_info = f" {COLOR_BLUE}[Baseline]{COLOR_RESET}"
+            
+            print(f"{COLOR_BLUE}📥 Starting leecher {i+1}/{len(leecher_instances)}: {leecher_id}{branch_info}{COLOR_RESET}")
             handler.start_signals[leecher_id] = time.time()
             
             if i < len(leecher_instances) - 1:  # Don't wait after the last one
@@ -1176,7 +1297,7 @@ class BitTorrentDeployer:
             print(f"{COLOR_GREEN}🌱 Starting seeder: {seeder_id}{COLOR_RESET}")
             handler.start_signals[seeder_id] = time.time()
         
-        print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 Staggered startup complete! Leechers started first, then seeders in parallel.{COLOR_RESET}")
+        print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 Staggered startup complete! Leechers started first (both branches), then seeders in parallel.{COLOR_RESET}")
         return True
     
     def wait_for_completion(self, handler, timeout_minutes):
@@ -1194,17 +1315,17 @@ class BitTorrentDeployer:
     
     def run(self):
         try:
-            print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 Enhanced BitTorrent Network Deployment with SCP File Collection{COLOR_RESET}")
+            print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 Enhanced BitTorrent Network Deployment with Branch Distribution{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 Run Name: {self.run_name}{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_BLUE}💾 Logs Directory: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_CYAN}📁 Project Files Directory: {LOGS_DIR}/{self.run_name}/project_files/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C at any time for graceful cleanup{COLOR_RESET}")
             print(f"{COLOR_CYAN}⚙️  Phase 1: All instances complete setup in parallel{COLOR_RESET}")
-            print(f"{COLOR_BLUE}📥 Phase 2: Start leechers first with staggered timing{COLOR_RESET}")
+            print(f"{COLOR_BLUE}📥 Phase 2: Start leechers first with staggered timing (proportional branch distribution){COLOR_RESET}")
             print(f"{COLOR_GREEN}🌱 Phase 3: Start seeders in parallel after leechers{COLOR_RESET}")
-            print(f"{COLOR_MAGENTA}📁 Phase 4: SCP collect project files from leechers{COLOR_RESET}")
+            print(f"{COLOR_MAGENTA}📁 Phase 4: SCP collect project files from leechers for branch comparison{COLOR_RESET}")
             
-            # Look up AMIs
+            # Look up AMIs FIRST - before using region_ami_map
             region_ami_map, ami_error = self._lookup_and_validate_amis()
             if ami_error:
                 print(f"\n{COLOR_RED}💥 AMI validation failed: {ami_error}{COLOR_RESET}")
@@ -1225,6 +1346,11 @@ class BitTorrentDeployer:
             github_repo = self.config.get_bittorrent_config()['github_repo']
             public_key = self.ssh_manager.get_public_key()
             
+            # Get branch configuration for display
+            propshare_branch = self.config.get_propshare_branch()
+            baseline_branch = self.config.get_baseline_branch()
+            proportion_propshare = self.config.get_proportion_propshare()
+            
             print(f"\n{COLOR_BOLD}=== Configuration ==={COLOR_RESET}")
             print(f"📂 GitHub repo: {github_repo}")
             print(f"📁 Torrent URL: {torrent_url}")
@@ -1233,10 +1359,22 @@ class BitTorrentDeployer:
             print(f"📁 File Collection: SCP transfer of stripped project directories")
             print(f"🗑️  Strip Criteria: Files with 'torrent' in name, remove 'torrents' folder")
             
-            print(f"\n{COLOR_BOLD}=== Deployment Plan ==={COLOR_RESET}")
+            print(f"\n{COLOR_BOLD}=== Branch Distribution Configuration ==={COLOR_RESET}")
+            print(f"🔀 Proportional Share Branch: {COLOR_GREEN}{propshare_branch}{COLOR_RESET}")
+            print(f"📊 Baseline Branch: {COLOR_BLUE}{baseline_branch}{COLOR_RESET}")
+            print(f"📈 Proportion using Propshare: {COLOR_YELLOW}{proportion_propshare:.1%}{COLOR_RESET}")
+            print(f"🌱 Seeders: Always use vplex-final branch")
+            
+            print(f"\n{COLOR_BOLD}=== Deployment Plan with Branch Distribution ==={COLOR_RESET}")
             for region in self.config.get_regions():
                 ami_id = region_ami_map[region['name']]
-                print(f"🌍 Region {region['name']}: {COLOR_GREEN}{region['seeders']} seeders{COLOR_RESET}, {COLOR_BLUE}{region['leechers']} leechers{COLOR_RESET} (AMI: {ami_id})")
+                total_leechers = region['leechers']
+                propshare_count = round(total_leechers * proportion_propshare)
+                baseline_count = total_leechers - propshare_count
+                
+                print(f"🌍 Region {region['name']}: {COLOR_GREEN}{region['seeders']} seeders{COLOR_RESET}, {COLOR_BLUE}{total_leechers} leechers{COLOR_RESET} (AMI: {ami_id})")
+                print(f"  📥 Leecher branches: {COLOR_GREEN}{propshare_count} propshare{COLOR_RESET}, {COLOR_BLUE}{baseline_count} baseline{COLOR_RESET}")
+            
             print(f"📊 Total: {COLOR_GREEN}{self.total_seeder_count} seeders{COLOR_RESET}, {COLOR_BLUE}{self.total_leecher_count} leechers{COLOR_RESET} = {COLOR_BOLD}{self.total_instance_count} instances{COLOR_RESET}")
             print(f"{COLOR_YELLOW}🔄 Coordinated startup timing:{COLOR_RESET}")
             print(f"  • Setup completion wait: {SETUP_COMPLETION_WAIT_SECONDS}s")
@@ -1252,6 +1390,7 @@ class BitTorrentDeployer:
             print(f"⚙️  Deploying {self.total_instance_count} instances across {len(self.config.get_regions())} regions...")
             print(f"📦 All instances will complete setup in parallel, then wait for coordinated start signals")
             print(f"🔑 SSH access configured for SCP file transfers")
+            print(f"🔀 Leechers will be deployed with proportional branch distribution")
             
             futures = []
             with ThreadPoolExecutor() as executor:
@@ -1308,7 +1447,7 @@ class BitTorrentDeployer:
             # Wait for completion
             print(f"\n{COLOR_BOLD}=== Live Status Dashboard ==={COLOR_RESET}")
             print("⚙️  All instances completed setup and received coordinated start signals")
-            print("📥 Leechers started first with staggered timing")
+            print("📥 Leechers started first with staggered timing (proportional branch distribution)")
             print("🌱 Seeders started in parallel after leechers were established")  
             print("📁 Project files will be automatically collected via SCP after BitTorrent completion")
             print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes for all to complete...")
@@ -1345,23 +1484,41 @@ class BitTorrentDeployer:
             files_dir = os.path.join(run_dir, "project_files")
             
             for instance_id, status in self.handler.completion_status.items():
-                final_log = os.path.join(run_dir, f"{instance_id}.log")
-                stream_log = os.path.join(run_dir, f"{instance_id}_stream.log")
+                # Determine log filenames based on instance type
+                if 'leecher' in instance_id:
+                    if 'propshare' in instance_id:
+                        final_log_name = f"{instance_id}-feat-proportional-share.log"
+                        stream_log_name = f"{instance_id}-feat-proportional-share_stream.log"
+                    elif 'baseline' in instance_id:
+                        final_log_name = f"{instance_id}-baseline-logging.log"  
+                        stream_log_name = f"{instance_id}-baseline-logging_stream.log"
+                    else:
+                        final_log_name = f"{instance_id}.log"
+                        stream_log_name = f"{instance_id}_stream.log"
+                else:
+                    # Seeders use standard naming
+                    final_log_name = f"{instance_id}.log"
+                    stream_log_name = f"{instance_id}_stream.log"
+                
+                final_log = os.path.join(run_dir, final_log_name)
+                stream_log = os.path.join(run_dir, stream_log_name)
                 
                 if os.path.exists(final_log):
-                    print(f"{COLOR_GREEN}✓ {instance_id}: {status} (final log: {final_log}){COLOR_RESET}")
+                    print(f"{COLOR_GREEN}✓ {instance_id}: {status} (final log: {final_log_name}){COLOR_RESET}")
                 else:
                     print(f"{COLOR_RED}✗ {instance_id}: {status} (no final log){COLOR_RESET}")
                 
                 if os.path.exists(stream_log):
-                    print(f"  {COLOR_CYAN}📡 Stream log: {stream_log}{COLOR_RESET}")
+                    print(f"  {COLOR_CYAN}📡 Stream log: {stream_log_name}{COLOR_RESET}")
                 
                 # Show project files for this instance (leechers only)
                 if 'leecher' in instance_id:
                     instance_files_dir = os.path.join(files_dir, instance_id)
                     if os.path.exists(instance_files_dir):
                         file_count = len([f for f in os.listdir(instance_files_dir) if os.path.isfile(os.path.join(instance_files_dir, f))])
-                        print(f"  {COLOR_CYAN}📁 Project files: {file_count} files in {instance_files_dir}{COLOR_RESET}")
+                        branch_type = "feat/proportional-share" if "propshare" in instance_id else "baseline-logging"
+                        branch_color = COLOR_GREEN if "propshare" in instance_id else COLOR_BLUE
+                        print(f"  {COLOR_CYAN}📁 Project files: {file_count} files in {instance_files_dir} {branch_color}[{branch_type}]{COLOR_RESET}")
             
             # Project Files Summary
             if total_files > 0:
@@ -1370,13 +1527,33 @@ class BitTorrentDeployer:
                 print(f"{COLOR_CYAN}📂 Project files location: {files_dir}{COLOR_RESET}")
                 print(f"{COLOR_YELLOW}🗑️  Files filtered: Only files with 'torrent' in name, 'torrents' folder removed{COLOR_RESET}")
                 
-                # Show detailed breakdown
+                # Show detailed breakdown with branch information
                 if os.path.exists(files_dir):
+                    propshare_files = 0
+                    baseline_files = 0
+                    propshare_instances = 0
+                    baseline_instances = 0
+                    
                     for instance_dir in os.listdir(files_dir):
                         instance_path = os.path.join(files_dir, instance_dir)
                         if os.path.isdir(instance_path):
                             file_count = len([f for f in os.listdir(instance_path) if os.path.isfile(os.path.join(instance_path, f))])
-                            print(f"  📁 {instance_dir}: {file_count} files")
+                            branch_type = "feat/proportional-share" if "propshare" in instance_dir else "baseline-logging"
+                            branch_color = COLOR_GREEN if "propshare" in instance_dir else COLOR_BLUE
+                            
+                            if "propshare" in instance_dir:
+                                propshare_files += file_count
+                                propshare_instances += 1
+                            else:
+                                baseline_files += file_count
+                                baseline_instances += 1
+                            
+                            print(f"  📁 {instance_dir}: {file_count} files {branch_color}[{branch_type}]{COLOR_RESET}")
+                    
+                    print(f"\n{COLOR_BOLD}=== Branch Comparison Summary ==={COLOR_RESET}")
+                    print(f"🔀 {COLOR_GREEN}feat/proportional-share: {propshare_instances} instances, {propshare_files} files{COLOR_RESET}")
+                    print(f"📊 {COLOR_BLUE}baseline-logging: {baseline_instances} instances, {baseline_files} files{COLOR_RESET}")
+                    print(f"🎯 {COLOR_BOLD}Ready for performance comparison analysis!{COLOR_RESET}")
             else:
                 print(f"\n{COLOR_YELLOW}⚠ No project files were collected{COLOR_RESET}")
             
@@ -1397,14 +1574,18 @@ class BitTorrentDeployer:
             print(f"{COLOR_GREEN}✓ Log server stopped{COLOR_RESET}")
             print(f"{COLOR_GREEN}✓ SSH keys cleaned up{COLOR_RESET}")
             
-            print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 Coordinated BitTorrent Network Test Completed!{COLOR_RESET}")
+            print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 BitTorrent Network Test with Branch Comparison Completed!{COLOR_RESET}")
             print(f"{COLOR_CYAN}⚙️  All instances completed setup in parallel{COLOR_RESET}")
-            print(f"{COLOR_BLUE}📥 {self.total_leecher_count} leechers started first with {LEECHER_START_INTERVAL_SECONDS}s intervals{COLOR_RESET}")
+            print(f"{COLOR_BLUE}📥 {self.total_leecher_count} leechers started first with staggered timing and branch distribution{COLOR_RESET}")
+            print(f"   {COLOR_GREEN}🔀 {proportion_propshare:.0%} used feat/proportional-share branch{COLOR_RESET}")
+            print(f"   {COLOR_BLUE}📊 {(1-proportion_propshare):.0%} used baseline-logging branch{COLOR_RESET}")
             print(f"{COLOR_GREEN}🌱 {self.total_seeder_count} seeders started in parallel after leechers{COLOR_RESET}")
-            print(f"{COLOR_MAGENTA}📁 Project files collected via SCP from leechers{COLOR_RESET}")
+            print(f"{COLOR_MAGENTA}📁 Project files collected via SCP from both branch types{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_YELLOW}📝 All logs saved in: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
+            print(f"{COLOR_CYAN}📊 Log files include branch names: *-feat-proportional-share.log, *-baseline-logging.log{COLOR_RESET}") 
             if total_files > 0:
                 print(f"{COLOR_BOLD}{COLOR_CYAN}📁 {total_files} project files saved in: {LOGS_DIR}/{self.run_name}/project_files/{COLOR_RESET}")
+                print(f"{COLOR_BOLD}🎯 Ready for feat/proportional-share vs baseline-logging performance comparison!{COLOR_RESET}")
             
             return self.handler.completion_status
             
