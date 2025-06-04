@@ -3,8 +3,8 @@ aws:
   security_group: default
 bittorrent:
   github_repo: https://github.com/fabioibanez/Rogue-Packet.git
-  seed_fileurl: https://raw.githubusercontent.com/fabioibanez/Rogue-Packet/vplex/distribed-reverted/seeder_sources/torrent_2.dat
-  torrent_url: https://raw.githubusercontent.com/fabioibanez/Rogue-Packet/vplex/distribed-reverted/torrents/torrent_2.dat.torrent
+  seed_fileurl: https://raw.githubusercontent.com/fabioibanez/Rogue-Packet/vplex/vplex-revert2/seeder_sources/torrent_2.dat
+  torrent_url: https://raw.githubusercontent.com/fabioibanez/Rogue-Packet/vplex/vplex-revert2/torrents/torrent_2.dat.torrent
 controller:
   port: 8080
 regions:
