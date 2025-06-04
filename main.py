@@ -43,8 +43,8 @@ class Run(object):
 
         self.torrent = Torrent().load_from_path(path=args.torrent_file)
         self.tracker = Tracker(self.torrent)
-        self.pieces_manager = PiecesManager(self.torrent)
         self.peers_manager = PeersManager(self.torrent, self.pieces_manager)
+        self.pieces_manager = PiecesManager(self.torrent, self.peers_manager)
         self.peers_manager.start()  # This starts the peer manager thread
 
         self.torrent_dir = os.path.splitext(os.path.basename(self.torrent_file))[0]
