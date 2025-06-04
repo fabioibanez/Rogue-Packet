@@ -4,6 +4,7 @@ Enhanced BitTorrent Network Deployment Script with Two-Phase Deployment
 - Phase 1: Deploy all seeders first and wait for them to be ready
 - Phase 2: Deploy leechers after seeders are serving
 - Includes CSV file collection from BitTorrent clients
+- FIXED: Ensures leechers never have the complete file when starting BitTorrent
 """
 
 # Timing Constants for Coordinated Startup
@@ -736,19 +737,62 @@ send_log "Downloading torrent file..."
 curl -L -o {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} {torrent_url}
 send_log "Torrent file download completed"
 
-# Role-specific setup
+# CRITICAL: Role-specific file handling - ensuring leechers NEVER have the complete file
 if [ "{role}" == "{ROLE_SEEDER}" ]; then
-    send_log "Seeder downloading seed file to project directory..."
+    echo "=== SEEDER: Downloading Complete File ==="
+    send_log "SEEDER: Downloading seed file to project directory..."
+    
+    # Seeders get the complete file in their working directory
     SEED_FILE=$(basename "{seed_fileurl}")
     [ -z "$SEED_FILE" ] && SEED_FILE="{SEED_FILENAME}"
+    
+    # Download directly to the project directory (current working directory)
     curl -L -o "$SEED_FILE" {seed_fileurl}
+    
     if [ ! -f "$SEED_FILE" ]; then
         send_log "ERROR: Failed to download seed file"
         exit 1
     fi
-    send_log "Seed file downloaded: $SEED_FILE"
+    
+    # Verify file exists and log its size
+    SEED_SIZE=$(stat -c%s "$SEED_FILE" 2>/dev/null || echo "0")
+    send_log "SEEDER: Seed file downloaded successfully: $SEED_FILE ($SEED_SIZE bytes)"
+    
+    # Double-check we're in the right directory
+    send_log "SEEDER: Working directory: $(pwd)"
+    send_log "SEEDER: File location: $(ls -la "$SEED_FILE" 2>/dev/null || echo 'FILE NOT FOUND')"
+    
 else
-    send_log "Leecher setup - will download via BitTorrent"
+    echo "=== LEECHER: Ensuring No Complete File ==="
+    send_log "LEECHER: Setting up for BitTorrent download (NO complete file)"
+    
+    # CRITICAL: Explicitly ensure no complete files exist in project directory
+    # Check for any potential seed files and remove them
+    POTENTIAL_SEED_FILES=("{SEED_FILENAME}" "$(basename "{seed_fileurl}")")
+    
+    for potential_file in "${{POTENTIAL_SEED_FILES[@]}}"; do
+        if [ -f "$potential_file" ]; then
+            send_log "WARNING: Found unexpected file '$potential_file' in leecher directory - REMOVING"
+            rm -f "$potential_file"
+            send_log "LEECHER: Removed unexpected file: $potential_file"
+        fi
+    done
+    
+    # Additional safety check - scan for any large files that might be the seed
+    send_log "LEECHER: Scanning project directory for unexpected large files..."
+    find . -type f -size +1M -not -path "./.git/*" -not -name "*.py" -not -name "*.txt" -not -name "requirements.txt" -not -name "*.md" | while read largefile; do
+        send_log "WARNING: Found unexpected large file '$largefile' in leecher directory - REMOVING"
+        rm -f "$largefile"
+        send_log "LEECHER: Removed unexpected large file: $largefile"
+    done
+    
+    # Final verification - list directory contents
+    send_log "LEECHER: Project directory contents after cleanup:"
+    ls -la . | while read line; do
+        send_log "LEECHER DIR: $line"
+    done
+    
+    send_log "LEECHER: Confirmed ready for BitTorrent download - NO complete files present"
 fi
 
 echo "=== Environment Setup ==="
@@ -778,6 +822,36 @@ done
 
 echo "=== Start Signal Received ==="
 send_log "Start signal received - beginning BitTorrent execution..."
+
+# FINAL VERIFICATION before starting BitTorrent
+echo "=== FINAL PRE-EXECUTION VERIFICATION ==="
+if [ "{role}" == "{ROLE_SEEDER}" ]; then
+    send_log "SEEDER VERIFICATION: Checking for seed file before BitTorrent start..."
+    SEED_FILE=$(basename "{seed_fileurl}")
+    [ -z "$SEED_FILE" ] && SEED_FILE="{SEED_FILENAME}"
+    
+    if [ -f "$SEED_FILE" ]; then
+        SEED_SIZE=$(stat -c%s "$SEED_FILE" 2>/dev/null || echo "0")
+        send_log "SEEDER VERIFIED: Seed file present: $SEED_FILE ($SEED_SIZE bytes)"
+    else
+        send_log "ERROR: SEEDER missing seed file: $SEED_FILE"
+        exit 1
+    fi
+else
+    send_log "LEECHER VERIFICATION: Ensuring NO complete files before BitTorrent start..."
+    
+    # One final check for any complete files
+    POTENTIAL_FILES=("{SEED_FILENAME}" "$(basename "{seed_fileurl}")")
+    for check_file in "${{POTENTIAL_FILES[@]}}"; do
+        if [ -f "$check_file" ]; then
+            send_log "CRITICAL ERROR: Leecher has complete file '$check_file' before BitTorrent start!"
+            send_log "This violates the requirement that leechers must not have the complete file!"
+            exit 1
+        fi
+    done
+    
+    send_log "LEECHER VERIFIED: No complete files present - ready for BitTorrent download"
+fi
 
 # Start log streaming
 tail -f /tmp/startup.log | while read line; do send_log "STARTUP: $line"; sleep 0.5; done &
@@ -1116,6 +1190,7 @@ class BitTorrentDeployer:
             print(f"{COLOR_CYAN}⚙️  Phase 1: All instances complete setup in parallel{COLOR_RESET}")
             print(f"{COLOR_BLUE}📥 Phase 2: Start leechers first with staggered timing{COLOR_RESET}")
             print(f"{COLOR_GREEN}🌱 Phase 3: Start seeders in parallel after leechers{COLOR_RESET}")
+            print(f"{COLOR_BOLD}{COLOR_RED}🚨 CRITICAL: Leechers will NOT have complete files when starting BitTorrent{COLOR_RESET}")
             
             # Look up AMIs
             region_ami_map, ami_error = self._lookup_and_validate_amis()
@@ -1139,6 +1214,9 @@ class BitTorrentDeployer:
             print(f"📁 Torrent URL: {torrent_url}")
             print(f"🌱 Seed file URL: {seed_fileurl}")
             print(f"🔒 Security: Creating All-All security groups (matching your setup)")
+            print(f"{COLOR_BOLD}{COLOR_RED}🚨 File Handling:{COLOR_RESET}")
+            print(f"  {COLOR_GREEN}🌱 Seeders: Will download complete file to project directory{COLOR_RESET}")
+            print(f"  {COLOR_BLUE}📥 Leechers: Will NOT have complete file - download via BitTorrent only{COLOR_RESET}")
             
             print(f"\n{COLOR_BOLD}=== Deployment Plan ==={COLOR_RESET}")
             for region in self.config.get_regions():
@@ -1157,6 +1235,7 @@ class BitTorrentDeployer:
             print(f"\n{COLOR_BOLD}{COLOR_CYAN}=== Deploying All Instances for Setup ==={COLOR_RESET}")
             print(f"⚙️  Deploying {self.total_instance_count} instances across {len(self.config.get_regions())} regions...")
             print(f"📦 All instances will complete setup in parallel, then wait for coordinated start signals")
+            print(f"{COLOR_BOLD}{COLOR_RED}🚨 Verification: Leechers will be checked to ensure NO complete files before BitTorrent start{COLOR_RESET}")
             
             futures = []
             with ThreadPoolExecutor() as executor:
@@ -1212,8 +1291,8 @@ class BitTorrentDeployer:
             # Wait for completion
             print(f"\n{COLOR_BOLD}=== Live Status Dashboard ==={COLOR_RESET}")
             print("⚙️  All instances completed setup and received coordinated start signals")
-            print("📥 Leechers started first with staggered timing")
-            print("🌱 Seeders started in parallel after leechers were established")  
+            print("📥 Leechers started first with staggered timing - WITHOUT complete files")
+            print("🌱 Seeders started in parallel after leechers were established - WITH complete files")  
             print("📊 CSV files will be automatically collected after BitTorrent completion")
             print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes for all to complete...")
             print(f"📁 Logs being saved to: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
@@ -1293,8 +1372,8 @@ class BitTorrentDeployer:
             
             print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 Coordinated BitTorrent Network Test Completed!{COLOR_RESET}")
             print(f"{COLOR_CYAN}⚙️  All instances completed setup in parallel{COLOR_RESET}")
-            print(f"{COLOR_BLUE}📥 {self.total_leecher_count} leechers started first with {LEECHER_START_INTERVAL_SECONDS}s intervals{COLOR_RESET}")
-            print(f"{COLOR_GREEN}🌱 {self.total_seeder_count} seeders started in parallel after leechers{COLOR_RESET}")
+            print(f"{COLOR_BLUE}📥 {self.total_leecher_count} leechers started first with {LEECHER_START_INTERVAL_SECONDS}s intervals - WITHOUT complete files{COLOR_RESET}")
+            print(f"{COLOR_GREEN}🌱 {self.total_seeder_count} seeders started in parallel after leechers - WITH complete files{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 All logs saved in: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
             if total_csv_files > 0:
                 print(f"{COLOR_BOLD}{COLOR_CYAN}📊 {total_csv_files} CSV files saved in: {LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
