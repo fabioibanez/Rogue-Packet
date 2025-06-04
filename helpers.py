@@ -63,14 +63,26 @@ def save_download_progress(dir_path: str, stop_event: threading.Event, save_path
     """Save download progress to CSV file."""
     while not stop_event.is_set():
         with open(save_path, 'a') as f:
-            # f.write(f"{dir_path},{get_dir_size(dir_path)},{time.time()}\n")
-            # write the size of all files / folders in the directory
-            for root, dirs, files in os.walk(dir_path):
-                for name in files:
-                    file_path = os.path.join(root, name)
-                    if not os.path.islink(file_path):
-                        size = os.path.getsize(file_path)
-                        f.write(f"{file_path},{size},{time.time()}\n")
+            current_time = time.time()
+            
+            # Get only first-level items in current working directory
+            for item in os.listdir(os.getcwd()):
+                item_path = os.path.join(os.getcwd(), item)
+                
+                if os.path.isfile(item_path) and not os.path.islink(item_path):
+                    # It's a file - get its size
+                    size = os.path.getsize(item_path)
+                    f.write(f"{item_path},{size},{current_time}\n")
+                    
+                elif os.path.isdir(item_path) and not os.path.islink(item_path):
+                    # It's a folder - get total size of all contents
+                    folder_size = sum(
+                        os.path.getsize(os.path.join(root, file))
+                        for root, dirs, files in os.walk(item_path)
+                        for file in files
+                        if not os.path.islink(os.path.join(root, file))
+                    )
+                    f.write(f"{item_path},{folder_size},{current_time}\n")
         
         time.sleep(PLOT_INTERVAL)
 
