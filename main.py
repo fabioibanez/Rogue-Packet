@@ -189,9 +189,9 @@ class Run(object):
             #     logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
             #     self.last_log_time = current_time
 
-        size_of_file = os.path.getsize(self.torrent_dir)  # or torrent_file?
-        elapsed_time = time.monotonic() - time_start
-        logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
+        # size_of_file = os.path.getsize(self.torrent_dir)  # or torrent_file?
+        # elapsed_time = time.monotonic() - time_start
+        # logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
 
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
