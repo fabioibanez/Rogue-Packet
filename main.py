@@ -19,10 +19,12 @@ from message import Request
 
 SLEEP_FOR_NO_UNCHOKED: int = 1
 NO_PROGRESS_YET_SENTINEL: int = -1
-REGULAR_UNCHOKE_INTERVAL: int = 10
-OPTIMISTIC_UNCHOKE_INTERVAL: int = 30
+REGULAR_UNCHOKE_INTERVAL: int = 2
+OPTIMISTIC_UNCHOKE_INTERVAL: int = 5
 MAX_OUTSTANDING_REQUESTS: int = 5
-TRACKER_REFRESH_INTERVAL: int = 180
+TRACKER_REFRESH_INTERVAL: int = 10
+
+# MINIMUM_PERIOD = 20
 
 class Run(object):
     percentage_completed = NO_PROGRESS_YET_SENTINEL
@@ -46,6 +48,8 @@ class Run(object):
         self.peers_manager.start()  # This starts the peer manager thread
 
         self.torrent_dir = os.path.splitext(os.path.basename(self.torrent_file))[0]
+        
+        self.last_log_time = 0
 
         self._start_plot_thread()
         self._start_save_progress_thread()
@@ -80,6 +84,12 @@ class Run(object):
         logging.info(f"\033[1;32mStarted saving progress for: {self.torrent_dir} to {save_path}\033[0m")
 
     def start(self):
+        # FIXME: hotfix to ensure that leechers can connect to other leechers and not just seeders
+        time.sleep(8)
+        
+        # Start time
+        time_start: float = time.monotonic()
+        
         peers = self.tracker.get_peers_from_trackers()
         self.peers_manager.add_peers(peers)
         
@@ -166,6 +176,45 @@ class Run(object):
 
             self.display_progression()
             time.sleep(0.1)
+            
+            # _target_file: str = ...
+            # assert os.path.exists(self.torrent_dir), f"Torrent directory {self.torrent_dir} does not exist."
+            
+            # get size of the target file
+            # In your loop
+            # current_time = time.monotonic()
+            # if current_time - self.last_log_time >= MINIMUM_PERIOD:
+            #     size_of_file = os.path.getsize(self.torrent_dir)  # or torrent_file?
+            #     elapsed_time = current_time - time_start
+            #     logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
+            #     self.last_log_time = current_time
+
+        # size_of_file = os.path.getsize(self.torrent_dir)  # or torrent_file?
+        elapsed_time = time.monotonic() - time_start
+        # logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
+        
+        # Log the name of each directory in the cwd and its size
+        # for root, dirs, files in os.walk(os.getcwd()):
+        #     logging.info(f"[TERM-DIRECTORY-SIZE] Really, we're looking for: {self.torrent_dir} in {root} @ {elapsed_time}")
+        #     for name in dirs:
+        #         dir_path = os.path.join(root, name)
+        #         if os.path.isdir(dir_path):
+        #             if '.git' in dir_path:
+        #                 continue
+        #             size = sum(os.path.getsize(os.path.join(dir_path, f)) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)))
+        #             logging.info(f"[TERM-DIRECTORY-SIZE] {dir_path}: {size} @ {elapsed_time}")
+        
+        logging.info(f"[TERM-DIRECTORY-SIZE] Really, we're looking for: {self.torrent_dir} in {root} @ {elapsed_time}")
+        for root, dirs, files in os.walk("/tmp"):
+            for name in dirs:
+                dir_path = os.path.join(root, name)
+                if os.path.isdir(dir_path):
+                    if '.git' in dir_path:
+                        continue
+                    size = sum(os.path.getsize(os.path.join(dir_path, f)) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)))
+                    logging.info(f"[TERM-DIRECTORY-SIZE] {dir_path}: {size} @ {elapsed_time}")
+
+        logging.info(f"[FLAG-GET-ELAPSED] Total time taken: {elapsed_time:.2f} seconds")
 
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
