@@ -300,7 +300,7 @@ class LogHandler(BaseHTTPRequestHandler):
                 csv_data = part.split(b'\r\n\r\n', 1)[1].rsplit(b'\r\n', 1)[0]
         
         if instance_id and csv_filename and csv_data:
-            # Save CSV file
+            # Save CSV file (overwrites existing)
             run_dir = os.path.join(self.logs_dir, self.run_name)
             csv_dir = os.path.join(run_dir, "csv_files")
             os.makedirs(csv_dir, exist_ok=True)
@@ -309,17 +309,32 @@ class LogHandler(BaseHTTPRequestHandler):
             with open(csv_path, 'wb') as f:
                 f.write(csv_data)
             
-            # Track CSV file
+            # Track/Update CSV file info
             if instance_id not in self.csv_files:
                 self.csv_files[instance_id] = []
-            self.csv_files[instance_id].append({
+            
+            # Check if this file already exists in tracking
+            existing_file_index = None
+            for i, csv_info in enumerate(self.csv_files[instance_id]):
+                if csv_info['filename'] == csv_filename:
+                    existing_file_index = i
+                    break
+            
+            file_info = {
                 'filename': csv_filename,
                 'path': csv_path,
                 'size': len(csv_data),
                 'timestamp': time.time()
-            })
+            }
             
-            print(f"{COLOR_CYAN}📊 CSV file received: {instance_id}/{csv_filename} ({len(csv_data)} bytes){COLOR_RESET}")
+            if existing_file_index is not None:
+                # Update existing file info
+                self.csv_files[instance_id][existing_file_index] = file_info
+                print(f"{COLOR_CYAN}📊 CSV file updated: {instance_id}/{csv_filename} ({len(csv_data)} bytes){COLOR_RESET}")
+            else:
+                # Add new file info
+                self.csv_files[instance_id].append(file_info)
+                print(f"{COLOR_CYAN}📊 CSV file received: {instance_id}/{csv_filename} ({len(csv_data)} bytes){COLOR_RESET}")
         
         self.send_response(HTTP_OK)
         self.end_headers()
@@ -678,8 +693,8 @@ upload_csv() {{
 
 # Continuous CSV monitoring and upload (runs in background)
 monitor_and_upload_csv() {{
-    UPLOADED_FILES_LIST="/tmp/uploaded_csvs.txt"
-    touch "$UPLOADED_FILES_LIST"
+    FILE_STATES_LIST="/tmp/csv_file_states.txt"
+    touch "$FILE_STATES_LIST"
     
     while true; do
         # Find all CSV files in the project directory
@@ -688,13 +703,27 @@ monitor_and_upload_csv() {{
                 csv_filename=$(basename "$csv_file")
                 csv_full_path=$(realpath "$csv_file")
                 
-                # Check if this file has already been uploaded
-                if ! grep -q "$csv_full_path" "$UPLOADED_FILES_LIST" 2>/dev/null; then
-                    # Upload the new CSV file
+                # Get current modification time and size
+                current_stat=$(stat -f "%m %z" "$csv_file" 2>/dev/null || stat -c "%Y %s" "$csv_file" 2>/dev/null || echo "0 0")
+                
+                # Check if this file's state has changed
+                previous_stat=$(grep "^$csv_full_path " "$FILE_STATES_LIST" 2>/dev/null | cut -d' ' -f2- || echo "")
+                
+                if [ "$current_stat" != "$previous_stat" ]; then
+                    # File is new or has been modified - upload it
                     if curl -X POST -F "instance_id={instance_id}" -F "csv_filename=$csv_filename" -F "csv_file=@$csv_file" http://{controller_ip}:{controller_port}{CSV_ENDPOINT} 2>/dev/null; then
-                        # Mark as uploaded
-                        echo "$csv_full_path" >> "$UPLOADED_FILES_LIST"
-                        send_log "Live uploaded CSV: $csv_filename"
+                        # Update the state tracking
+                        # Remove old entry if exists
+                        grep -v "^$csv_full_path " "$FILE_STATES_LIST" > "$FILE_STATES_LIST.tmp" 2>/dev/null || touch "$FILE_STATES_LIST.tmp"
+                        # Add new entry
+                        echo "$csv_full_path $current_stat" >> "$FILE_STATES_LIST.tmp"
+                        mv "$FILE_STATES_LIST.tmp" "$FILE_STATES_LIST"
+                        
+                        if [ -z "$previous_stat" ]; then
+                            send_log "New CSV detected and uploaded: $csv_filename"
+                        else
+                            send_log "CSV updated and re-uploaded: $csv_filename"
+                        fi
                     fi
                 fi
             fi
@@ -1366,7 +1395,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n{COLOR_RED}💥 Fatal error: {e}{COLOR_RESET}")
         sys.exit(1)
-        
+
 """
 > Ensure that CSV files are being sent to controller (including progress one)
 > Stop controller program when all leechers are done
