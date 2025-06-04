@@ -796,20 +796,119 @@ send_log "Python dependencies installation completed"
 echo "=== Downloading Files ==="
 mkdir -p {TORRENT_TEMP_DIR}
 send_log "Downloading torrent file..."
-curl -L -o {TORRENT_TEMP_DIR}/{TORRENT_FILENAME} {torrent_url}
-send_log "Torrent file download completed"
+
+# Download torrent file with validation and retry logic
+TORRENT_PATH="{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
+TORRENT_DOWNLOAD_SUCCESS=false
+
+for attempt in 1 2 3; do
+    echo "Torrent download attempt $attempt/3..."
+    send_log "Torrent download attempt $attempt/3 from {torrent_url}"
+    
+    # Download with verbose output and follow redirects
+    HTTP_CODE=$(curl -L -w "%{{http_code}}" -H "User-Agent: BitTorrent-Client/1.0" -o "$TORRENT_PATH" "{torrent_url}" 2>/dev/null)
+    CURL_EXIT=$?
+    
+    echo "HTTP response code: $HTTP_CODE"
+    echo "Curl exit code: $CURL_EXIT"
+    
+    if [ $CURL_EXIT -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
+        # Check if file exists and has reasonable size
+        if [ -f "$TORRENT_PATH" ]; then
+            TORRENT_SIZE=$(stat -f%z "$TORRENT_PATH" 2>/dev/null || stat -c%s "$TORRENT_PATH" 2>/dev/null || echo "0")
+            echo "Downloaded torrent file size: $TORRENT_SIZE bytes"
+            
+            if [ "$TORRENT_SIZE" -gt 50 ]; then
+                # Check if it looks like a torrent file (starts with 'd' for dictionary)
+                FIRST_CHAR=$(head -c 1 "$TORRENT_PATH" 2>/dev/null || echo "")
+                if [ "$FIRST_CHAR" = "d" ]; then
+                    echo "✓ Torrent file appears valid (size: $TORRENT_SIZE bytes, starts with 'd')"
+                    send_log "Torrent file download successful: $TORRENT_SIZE bytes"
+                    TORRENT_DOWNLOAD_SUCCESS=true
+                    break
+                else
+                    echo "✗ File doesn't appear to be a torrent (first char: '$FIRST_CHAR')"
+                    echo "File content preview:"
+                    head -c 100 "$TORRENT_PATH" 2>/dev/null || echo "Could not read file"
+                fi
+            else
+                echo "✗ File too small: $TORRENT_SIZE bytes"
+                echo "File content:"
+                cat "$TORRENT_PATH" 2>/dev/null || echo "Could not read file"
+            fi
+        else
+            echo "✗ File not created"
+        fi
+    else
+        echo "✗ Download failed - HTTP: $HTTP_CODE, Curl exit: $CURL_EXIT"
+    fi
+    
+    if [ $attempt -lt 3 ]; then
+        echo "Retrying in 3 seconds..."
+        sleep 3
+    fi
+done
+
+if [ "$TORRENT_DOWNLOAD_SUCCESS" = "false" ]; then
+    send_log "ERROR: Failed to download valid torrent file after 3 attempts"
+    echo "ERROR: Could not download torrent file from {torrent_url}"
+    echo "Final file state:"
+    ls -la "$TORRENT_PATH" 2>/dev/null || echo "File does not exist"
+    exit 1
+fi
+
+send_log "Torrent file download completed successfully"
 
 # Role-specific setup
 if [ "{role}" == "{ROLE_SEEDER}" ]; then
     send_log "Seeder downloading seed file to project directory..."
     SEED_FILE=$(basename "{seed_fileurl}")
     [ -z "$SEED_FILE" ] && SEED_FILE="{SEED_FILENAME}"
-    curl -L -o "$SEED_FILE" {seed_fileurl}
-    if [ ! -f "$SEED_FILE" ]; then
-        send_log "ERROR: Failed to download seed file"
+    
+    echo "Downloading seed file: $SEED_FILE from {seed_fileurl}"
+    SEED_DOWNLOAD_SUCCESS=false
+    
+    for attempt in 1 2 3; do
+        echo "Seed file download attempt $attempt/3..."
+        send_log "Seed file download attempt $attempt/3"
+        
+        HTTP_CODE=$(curl -L -w "%{{http_code}}" -H "User-Agent: BitTorrent-Client/1.0" -o "$SEED_FILE" "{seed_fileurl}" 2>/dev/null)
+        CURL_EXIT=$?
+        
+        echo "HTTP response code: $HTTP_CODE"
+        echo "Curl exit code: $CURL_EXIT"
+        
+        if [ $CURL_EXIT -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
+            if [ -f "$SEED_FILE" ]; then
+                SEED_SIZE=$(stat -f%z "$SEED_FILE" 2>/dev/null || stat -c%s "$SEED_FILE" 2>/dev/null || echo "0")
+                echo "Downloaded seed file size: $SEED_SIZE bytes"
+                
+                if [ "$SEED_SIZE" -gt 0 ]; then
+                    echo "✓ Seed file download successful: $SEED_FILE ($SEED_SIZE bytes)"
+                    send_log "Seed file downloaded successfully: $SEED_FILE ($SEED_SIZE bytes)"
+                    SEED_DOWNLOAD_SUCCESS=true
+                    break
+                else
+                    echo "✗ Seed file is empty"
+                fi
+            else
+                echo "✗ Seed file not created"
+            fi
+        else
+            echo "✗ Seed file download failed - HTTP: $HTTP_CODE, Curl exit: $CURL_EXIT"
+        fi
+        
+        if [ $attempt -lt 3 ]; then
+            echo "Retrying in 3 seconds..."
+            sleep 3
+        fi
+    done
+    
+    if [ "$SEED_DOWNLOAD_SUCCESS" = "false" ]; then
+        send_log "ERROR: Failed to download seed file after 3 attempts"
+        echo "ERROR: Could not download seed file from {seed_fileurl}"
         exit 1
     fi
-    send_log "Seed file downloaded: $SEED_FILE"
 else
     send_log "Leecher setup - will download via BitTorrent"
 fi
@@ -854,12 +953,46 @@ echo "=== Directory Structure Verification ===" >> {LOG_FILE_PATH}
 echo "Current working directory: $(pwd)" >> {LOG_FILE_PATH}
 echo "Directory tree before BitTorrent execution:" >> {LOG_FILE_PATH}
 tree . >> {LOG_FILE_PATH} 2>&1
+echo "" >> {LOG_FILE_PATH}
 echo "Torrent temp directory contents:" >> {LOG_FILE_PATH}
 ls -la {TORRENT_TEMP_DIR}/ >> {LOG_FILE_PATH} 2>&1
+echo "" >> {LOG_FILE_PATH}
+echo "Torrent file validation details:" >> {LOG_FILE_PATH}
+if [ -f "{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}" ]; then
+    echo "Torrent file size: $(stat -f%z '{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}' 2>/dev/null || stat -c%s '{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}' 2>/dev/null || echo 'unknown') bytes" >> {LOG_FILE_PATH}
+    echo "Torrent file first 50 bytes (hex):" >> {LOG_FILE_PATH}
+    xxd -l 50 "{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}" >> {LOG_FILE_PATH} 2>&1 || echo "Could not read torrent file with xxd" >> {LOG_FILE_PATH}
+    echo "Torrent file first line (text):" >> {LOG_FILE_PATH}
+    head -n 1 "{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}" >> {LOG_FILE_PATH} 2>&1 || echo "Could not read torrent file as text" >> {LOG_FILE_PATH}
+else
+    echo "ERROR: Torrent file not found!" >> {LOG_FILE_PATH}
+fi
 echo "========================================" >> {LOG_FILE_PATH}
 
 echo "=== Starting BitTorrent Client ==="
 send_log "Starting BitTorrent client from project directory..."
+
+# Final validation of torrent file before execution
+echo "Final torrent file validation..."
+TORRENT_PATH="{TORRENT_TEMP_DIR}/{TORRENT_FILENAME}"
+if [ ! -f "$TORRENT_PATH" ]; then
+    send_log "ERROR: Torrent file missing at execution time"
+    echo "ERROR: Torrent file not found: $TORRENT_PATH"
+    exit 1
+fi
+
+FINAL_TORRENT_SIZE=$(stat -f%z "$TORRENT_PATH" 2>/dev/null || stat -c%s "$TORRENT_PATH" 2>/dev/null || echo "0")
+echo "Final torrent file size: $FINAL_TORRENT_SIZE bytes"
+if [ "$FINAL_TORRENT_SIZE" -lt 50 ]; then
+    send_log "ERROR: Torrent file too small at execution time ($FINAL_TORRENT_SIZE bytes)"
+    echo "ERROR: Torrent file appears corrupted (size: $FINAL_TORRENT_SIZE bytes)"
+    echo "File content:"
+    cat "$TORRENT_PATH" 2>/dev/null || echo "Could not read file"
+    exit 1
+fi
+
+echo "✓ Torrent file validation passed"
+send_log "Torrent file validation passed - ready to start BitTorrent"
 
 if [ "{role}" == "{ROLE_SEEDER}" ]; then
     send_log "Starting BitTorrent client as SEEDER"
@@ -1404,5 +1537,17 @@ if __name__ == "__main__":
 
 baseline-logging
 feat/proportional-share
+
+Can you please modify this so the config.yaml has the github link to the  feat/proportional-share branch and the baseline-logging branch? For the leechers, this is the branch that should be cloned on the leechers machines. Specifically, there should be an argument for:
+
+propshare_branch: linked to the feat/proportional-share branch
+
+baseline_branch: linked to the baseline-logging
+
+proportion_propshare: a float from 0 to 1 inclusive.
+
+This proportion_propshare # should be distributed evenly among all the regions, among the leechers. So specifically if there are 10 leechers in a region, and proportion propshare is 0.60, then 6 leechers should git clone using the proportional share branch while the other 4 leechers should use the baseline-logging branch.
+
+If the proportion isn't evenly split
 
 """
