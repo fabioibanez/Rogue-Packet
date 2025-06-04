@@ -46,6 +46,8 @@ class Run(object):
         self.peers_manager.start()  # This starts the peer manager thread
 
         self.torrent_dir = os.path.splitext(os.path.basename(self.torrent_file))[0]
+        
+        self.last_log_time = 0
 
         self._start_plot_thread()
         self._start_save_progress_thread()
@@ -177,12 +179,14 @@ class Run(object):
             # assert os.path.exists(self.torrent_dir), f"Torrent directory {self.torrent_dir} does not exist."
             
             # get size of the target file
-            MINIMUM_PERIOD = 5 # number of seconds in which we print out the log
-            size_of_file = os.path.getsize(self.torrent_dir)
-            elapsed_time = time.monotonic() - time_start
-            if elapsed_time >= MINIMUM_PERIOD:
-                # If the elapsed time is greater than the minimum period, we log the size of the file
+            # In your loop
+            MINIMUM_PERIOD = 5
+            current_time = time.monotonic()
+            if current_time - self.last_log_time >= MINIMUM_PERIOD:
+                size_of_file = os.path.getsize(self.torrent_dir)  # or torrent_file?
+                elapsed_time = current_time - time_start
                 logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
+                self.last_log_time = current_time
 
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
