@@ -24,6 +24,8 @@ OPTIMISTIC_UNCHOKE_INTERVAL: int = 5
 MAX_OUTSTANDING_REQUESTS: int = 5
 TRACKER_REFRESH_INTERVAL: int = 180
 
+# MINIMUM_PERIOD = 20
+
 class Run(object):
     percentage_completed = NO_PROGRESS_YET_SENTINEL
     last_log_line = ""
@@ -180,13 +182,16 @@ class Run(object):
             
             # get size of the target file
             # In your loop
-            MINIMUM_PERIOD = 5
-            current_time = time.monotonic()
-            if current_time - self.last_log_time >= MINIMUM_PERIOD:
-                size_of_file = os.path.getsize(self.torrent_dir)  # or torrent_file?
-                elapsed_time = current_time - time_start
-                logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
-                self.last_log_time = current_time
+            # current_time = time.monotonic()
+            # if current_time - self.last_log_time >= MINIMUM_PERIOD:
+            #     size_of_file = os.path.getsize(self.torrent_dir)  # or torrent_file?
+            #     elapsed_time = current_time - time_start
+            #     logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
+            #     self.last_log_time = current_time
+
+        size_of_file = os.path.getsize(self.torrent_dir)  # or torrent_file?
+        elapsed_time = time.monotonic() - time_start
+        logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
 
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
