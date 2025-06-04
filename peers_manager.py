@@ -10,7 +10,9 @@ requires you to send a message to the peer to unchoke
 keep track of choke/unchoke set
 '''
 
+import os
 import random
+import time
 from typing import Iterable
 
 from bitstring import BitArray
@@ -31,11 +33,13 @@ import logging
 import errno
 import socket
 
+time_start = time.monotonic()  # Global start time for logging
 
 K_MINUS_1 = 3
 class PeersManager(Thread):    
     def __init__(self, torrent: Torrent,
-                 pieces_manager: PiecesManager) -> None:
+                 pieces_manager: PiecesManager,
+                 torrent_dir: str) -> None:
         Thread.__init__(self)
         self.peers: list[Peer] = []  # List of connected peers
 
@@ -53,6 +57,8 @@ class PeersManager(Thread):
 
         # Events
         pub.subscribe(self.broadcast_have, 'PeersManager.BroadcastHave')
+        
+        self.torrent_dir = torrent_dir  # Directory where the torrent files are stored
 
     def broadcast_have(self, piece_index: int, bitfield: BitArray) -> None:
         have_message = Have(piece_index)
@@ -67,6 +73,10 @@ class PeersManager(Thread):
             # If after completing a piece, the peer no longer has anything to offer, send a NOT INTERESTED message
             if peer.am_interested() and sum(~bitfield & peer.bitfield) == 0:
                 peer.send_to_peer(NotInterested())
+                
+            size_of_file = os.path.getsize(self.torrent_dir)
+            elapsed_time = time.monotonic() - time_start
+            logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
 
     def get_random_peer_having_piece(self, piece_index: int) -> Peer | None:
         ready_peers = []

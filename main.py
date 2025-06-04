@@ -42,10 +42,10 @@ class Run(object):
         self.torrent = Torrent().load_from_path(path=args.torrent_file)
         self.tracker = Tracker(self.torrent)
         self.pieces_manager = PiecesManager(self.torrent)
-        self.peers_manager = PeersManager(self.torrent, self.pieces_manager)
+        self.torrent_dir = os.path.splitext(os.path.basename(self.torrent_file))[0]
+        self.peers_manager = PeersManager(self.torrent, self.pieces_manager, self.torrent_dir)
         self.peers_manager.start()  # This starts the peer manager thread
 
-        self.torrent_dir = os.path.splitext(os.path.basename(self.torrent_file))[0]
 
         self._start_plot_thread()
         self._start_save_progress_thread()
@@ -177,9 +177,9 @@ class Run(object):
             assert os.path.exists(self.torrent_dir), f"Torrent directory {self.torrent_dir} does not exist."
             
             # get size of the target file
-            size_of_file = os.path.getsize(os.path.join(self.torrent_dir, self.torrent.name))
-            elapsed_time = time.monotonic() - time_start
-            logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
+            # size_of_file = os.path.getsize(os.path.join(self.torrent_dir, self.torrent.name))
+            # elapsed_time = time.monotonic() - time_start
+            # logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
 
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
