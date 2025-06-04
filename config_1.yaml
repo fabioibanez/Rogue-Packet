@@ -2,7 +2,7 @@ aws:
   instance_type: t2.micro
   security_group: default
 bittorrent:
-  baseline_branch: baseline-logging
+  baseline_branch: vplex-final
   github_repo: https://github.com/fabioibanez/Rogue-Packet.git
   proportion_propshare: 0.5
   propshare_branch: master
