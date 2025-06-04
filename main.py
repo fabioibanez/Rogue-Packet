@@ -19,10 +19,12 @@ from message import Request
 
 SLEEP_FOR_NO_UNCHOKED: int = 1
 NO_PROGRESS_YET_SENTINEL: int = -1
-REGULAR_UNCHOKE_INTERVAL: int = 10
-OPTIMISTIC_UNCHOKE_INTERVAL: int = 30
+REGULAR_UNCHOKE_INTERVAL: int = 2
+OPTIMISTIC_UNCHOKE_INTERVAL: int = 5
 MAX_OUTSTANDING_REQUESTS: int = 5
-TRACKER_REFRESH_INTERVAL: int = 180
+TRACKER_REFRESH_INTERVAL: int = 10
+
+# MINIMUM_PERIOD = 20
 
 class Run(object):
     percentage_completed = NO_PROGRESS_YET_SENTINEL
@@ -31,6 +33,7 @@ class Run(object):
     save_progress_stop_event = threading.Event()
 
     torrent_file: str
+    torrent_dir: str
 
     def __init__(self, args: argparse.Namespace):
         self.verbose: bool = args.verbose
@@ -40,13 +43,17 @@ class Run(object):
 
         self.torrent = Torrent().load_from_path(path=args.torrent_file)
         self.tracker = Tracker(self.torrent)
-        self.torrent_dir = os.path.splitext(os.path.basename(self.torrent_file))[0]
-        self.peers_manager = PeersManager(self.torrent, self.torrent_dir)
-        self.pieces_manager = PiecesManager(self.torrent, self.peers_manager)
+        self.pieces_manager = PiecesManager(self.torrent)
+        self.peers_manager = PeersManager(self.torrent, self.pieces_manager)
         self.peers_manager.start()  # This starts the peer manager thread
+
+        self.torrent_dir = os.path.splitext(os.path.basename(self.torrent_file))[0]
+        
+        self.last_log_time = 0
 
         self._start_plot_thread()
         self._start_save_progress_thread()
+        
         logging.info("PeersManager Started")
         logging.info("PiecesManager Started")
 
@@ -67,18 +74,22 @@ class Run(object):
 
     def _start_save_progress_thread(self) -> None:
         """Start the save progress thread"""
-        torrent_name = os.path.splitext(os.path.basename(self.torrent_file))[0]
-        torrent_dir = torrent_name
-        save_path = f"{torrent_dir}_progress.csv"
+        save_path = f"{self.torrent_dir}_progress.csv"
         save_progress_thread = threading.Thread(
             target=save_download_progress,
-            args=(torrent_dir, self.save_progress_stop_event, save_path),
+            args=(self.torrent_dir, self.save_progress_stop_event, save_path),
             daemon=True
         )
         save_progress_thread.start()
-        logging.info(f"\033[1;32mStarted saving progress for: {torrent_dir} to {save_path}\033[0m")
+        logging.info(f"\033[1;32mStarted saving progress for: {self.torrent_dir} to {save_path}\033[0m")
 
     def start(self):
+        # FIXME: hotfix to ensure that leechers can connect to other leechers and not just seeders
+        time.sleep(8)
+        
+        # Start time
+        time_start: float = time.monotonic()
+        
         peers = self.tracker.get_peers_from_trackers()
         self.peers_manager.add_peers(peers)
         
@@ -165,6 +176,45 @@ class Run(object):
 
             self.display_progression()
             time.sleep(0.1)
+            
+            # _target_file: str = ...
+            # assert os.path.exists(self.torrent_dir), f"Torrent directory {self.torrent_dir} does not exist."
+            
+            # get size of the target file
+            # In your loop
+            # current_time = time.monotonic()
+            # if current_time - self.last_log_time >= MINIMUM_PERIOD:
+            #     size_of_file = os.path.getsize(self.torrent_dir)  # or torrent_file?
+            #     elapsed_time = current_time - time_start
+            #     logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
+            #     self.last_log_time = current_time
+
+        # size_of_file = os.path.getsize(self.torrent_dir)  # or torrent_file?
+        elapsed_time = time.monotonic() - time_start
+        # logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
+        
+        # Log the name of each directory in the cwd and its size
+        # for root, dirs, files in os.walk(os.getcwd()):
+        #     logging.info(f"[TERM-DIRECTORY-SIZE] Really, we're looking for: {self.torrent_dir} in {root} @ {elapsed_time}")
+        #     for name in dirs:
+        #         dir_path = os.path.join(root, name)
+        #         if os.path.isdir(dir_path):
+        #             if '.git' in dir_path:
+        #                 continue
+        #             size = sum(os.path.getsize(os.path.join(dir_path, f)) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)))
+        #             logging.info(f"[TERM-DIRECTORY-SIZE] {dir_path}: {size} @ {elapsed_time}")
+        
+        logging.info(f"[TERM-DIRECTORY-SIZE] Really, we're looking for: {self.torrent_dir} in {root} @ {elapsed_time}")
+        for root, dirs, files in os.walk("/tmp"):
+            for name in dirs:
+                dir_path = os.path.join(root, name)
+                if os.path.isdir(dir_path):
+                    if '.git' in dir_path:
+                        continue
+                    size = sum(os.path.getsize(os.path.join(dir_path, f)) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)))
+                    logging.info(f"[TERM-DIRECTORY-SIZE] {dir_path}: {size} @ {elapsed_time}")
+
+        logging.info(f"[FLAG-GET-ELAPSED] Total time taken: {elapsed_time:.2f} seconds")
 
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
@@ -182,7 +232,11 @@ class Run(object):
            - Number of connected peers that are unchoked (actively sharing)
            - Percentage of total file downloaded
            - Number of complete pieces vs total pieces
+        
+        Format:
+        "Connected peers: X active peer - Y% completed | Z/N pieces"
         """
+        
         # This is the total number of bytes downloaded by us for our specific torrent file
         new_progression = 0
 
