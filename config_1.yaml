@@ -8,7 +8,7 @@ bittorrent:
 controller:
   port: 8080
 regions:
-- leechers: 2
+- leechers: 1
   name: us-west-1
   seeders: 1
 timeout_minutes: 30
