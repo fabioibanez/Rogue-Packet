@@ -173,8 +173,8 @@ class Run(object):
             self.display_progression()
             time.sleep(0.1)
             
-            _target_file: str = ...
-            assert os.path.exists(self.torrent_dir), f"Torrent directory {self.torrent_dir} does not exist."
+            # _target_file: str = ...
+            # assert os.path.exists(self.torrent_dir), f"Torrent directory {self.torrent_dir} does not exist."
             
             # get size of the target file
             size_of_file = os.path.getsize(os.path.join(self.torrent_dir, self.torrent.name))
