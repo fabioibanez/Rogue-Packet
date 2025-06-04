@@ -18,19 +18,19 @@ from pathlib import Path
 
 def parse_filename(filename):
     """
-    Parse log filename to extract region, type, and create simplified key.
+    Parse log filename to extract region, type, client_type, and create simplified key.
     
     Example: 'us-west-1-leecher-0-propshare-feat-proportional-share.log'
-    Returns: ('us-west-1-leecher-0.log', 'leecher', 'us-west-1')
+    Returns: ('us-west-1-leecher-0.log', 'leecher', 'us-west-1', 'propshare')
     """
     if not filename.endswith('.log'):
-        return None, None, None
+        return None, None, None, None
     
     # Remove .log extension
     name_without_ext = filename.replace('.log', '')
     parts = name_without_ext.split('-')
     
-    if len(parts) >= 4:
+    if len(parts) >= 6:
         # Extract region (e.g., 'us-west-1')
         region = f"{parts[0]}-{parts[1]}-{parts[2]}"
         
@@ -40,12 +40,15 @@ def parse_filename(filename):
         # Extract instance number
         instance_num = parts[4] if len(parts) > 4 else "0"
         
+        # Extract client type (e.g., 'propshare', 'baseline')
+        client_type = parts[5] if len(parts) > 5 else None
+        
         # Create simplified key
         simplified_key = f"{region}-{file_type}-{instance_num}.log"
         
-        return simplified_key, file_type, region
+        return simplified_key, file_type, region, client_type
     
-    return None, None, None
+    return None, None, None, None
 
 def monitor_directory(directory_path):
     """Monitor directory for new non-streaming log files."""
@@ -96,13 +99,14 @@ def monitor_directory(directory_path):
                     os.path.isfile(os.path.join(directory_path, filename))):
                     
                     elapsed = time.time() - start_time
-                    simplified_key, file_type, region = parse_filename(filename)
+                    simplified_key, file_type, region, client_type = parse_filename(filename)
                     
                     if simplified_key and file_type and region:
                         results[simplified_key] = {
                             "elapsed_seconds": round(elapsed, 2),
                             "type": file_type,
-                            "region": region
+                            "region": region,
+                            "client_type": client_type
                         }
                         print(f"✓ Found: {filename} after {elapsed:.2f} seconds")
                     else:
@@ -133,7 +137,8 @@ def save_results(results):
         print(f"Results saved to {output_file}")
         print(f"Detected {len(results)} new log files:")
         for key, data in sorted(results.items()):
-            print(f"  {key}: {data['elapsed_seconds']}s ({data['type']}, {data['region']})")
+            client_info = f", {data['client_type']}" if data.get('client_type') else ""
+            print(f"  {key}: {data['elapsed_seconds']}s ({data['type']}, {data['region']}{client_info})")
     except Exception as e:
         print(f"Error saving results: {e}")
 
