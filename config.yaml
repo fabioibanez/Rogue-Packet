@@ -12,7 +12,7 @@ controller:
   port: 8080
 regions:
 
-- leechers: 29
+- leechers: 12
   name: us-west-1
   seeders: 3
 
