@@ -7,9 +7,9 @@ Enhanced BitTorrent Network Deployment Script with Two-Phase Deployment
 """
 
 # Timing Constants for Coordinated Startup
-SETUP_COMPLETION_WAIT_SECONDS = 10  # Wait after all instances finish setup
+SETUP_COMPLETION_WAIT_SECONDS = 5  # Wait after all instances finish setup
 LEECHER_START_INTERVAL_SECONDS = 5  # Wait between each leecher starting
-POST_LEECHERS_WAIT_SECONDS = 10     # Wait after all leechers start before seeders
+POST_LEECHERS_WAIT_SECONDS = 5     # Wait after all leechers start before seeders
 # Seeders start in parallel (no interval needed)
 
 # Constants
