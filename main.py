@@ -190,8 +190,16 @@ class Run(object):
             #     self.last_log_time = current_time
 
         # size_of_file = os.path.getsize(self.torrent_dir)  # or torrent_file?
-        # elapsed_time = time.monotonic() - time_start
+        elapsed_time = time.monotonic() - time_start
         # logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
+        
+        # Log the name of each directory in the cwd and its size
+        for root, dirs, files in os.walk(os.getcwd()):
+            for name in dirs:
+                dir_path = os.path.join(root, name)
+                if os.path.isdir(dir_path):
+                    size = sum(os.path.getsize(os.path.join(dir_path, f)) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)))
+                    logging.info(f"[TERM-DIRECTORY-SIZE] {dir_path}: {size} @ {elapsed_time}")
 
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
