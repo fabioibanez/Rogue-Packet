@@ -177,9 +177,9 @@ class Run(object):
             # assert os.path.exists(self.torrent_dir), f"Torrent directory {self.torrent_dir} does not exist."
             
             # get size of the target file
-            size_of_file = os.path.getsize(os.path.join(self.torrent_dir, self.torrent.name))
-            elapsed_time = time.monotonic() - time_start
-            logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
+            # size_of_file = os.path.getsize(os.path.join(self.torrent_dir, self.torrent.name))
+            # elapsed_time = time.monotonic() - time_start
+            # logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
 
         logging.info("File(s) downloaded successfully.")
         self.display_progression()
