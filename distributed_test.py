@@ -126,7 +126,7 @@ class Config:
         return self.data['timeout_minutes']
 
     def get_propshare_branch(self):
-        return self.data['bittorrent'].get('propshare_branch', 'feat/proportional-share')
+        return self.data['bittorrent'].get('propshare_branch', 'master')
     
     def get_baseline_branch(self):
         return self.data['bittorrent'].get('baseline_branch', 'baseline-logging')
@@ -994,7 +994,7 @@ class BitTorrentDeployer:
                             # Show branch type in emergency log summary
                             branch_info = ""
                             if "feat-proportional-share" in file:
-                                branch_info = f" {COLOR_GREEN}[feat/proportional-share]{COLOR_RESET}"
+                                branch_info = f" {COLOR_GREEN}[master]{COLOR_RESET}"
                             elif "baseline-logging" in file:
                                 branch_info = f" {COLOR_BLUE}[baseline-logging]{COLOR_RESET}"
                             print(f"{COLOR_GREEN}📝 {file} ({file_size} bytes){branch_info}{COLOR_RESET}")
@@ -1516,7 +1516,7 @@ class BitTorrentDeployer:
                     instance_files_dir = os.path.join(files_dir, instance_id)
                     if os.path.exists(instance_files_dir):
                         file_count = len([f for f in os.listdir(instance_files_dir) if os.path.isfile(os.path.join(instance_files_dir, f))])
-                        branch_type = "feat/proportional-share" if "propshare" in instance_id else "baseline-logging"
+                        branch_type = "master" if "propshare" in instance_id else "baseline-logging"
                         branch_color = COLOR_GREEN if "propshare" in instance_id else COLOR_BLUE
                         print(f"  {COLOR_CYAN}📁 Project files: {file_count} files in {instance_files_dir} {branch_color}[{branch_type}]{COLOR_RESET}")
             
@@ -1538,7 +1538,7 @@ class BitTorrentDeployer:
                         instance_path = os.path.join(files_dir, instance_dir)
                         if os.path.isdir(instance_path):
                             file_count = len([f for f in os.listdir(instance_path) if os.path.isfile(os.path.join(instance_path, f))])
-                            branch_type = "feat/proportional-share" if "propshare" in instance_dir else "baseline-logging"
+                            branch_type = "master" if "propshare" in instance_dir else "baseline-logging"
                             branch_color = COLOR_GREEN if "propshare" in instance_dir else COLOR_BLUE
                             
                             if "propshare" in instance_dir:
@@ -1551,7 +1551,7 @@ class BitTorrentDeployer:
                             print(f"  📁 {instance_dir}: {file_count} files {branch_color}[{branch_type}]{COLOR_RESET}")
                     
                     print(f"\n{COLOR_BOLD}=== Branch Comparison Summary ==={COLOR_RESET}")
-                    print(f"🔀 {COLOR_GREEN}feat/proportional-share: {propshare_instances} instances, {propshare_files} files{COLOR_RESET}")
+                    print(f"🔀 {COLOR_GREEN}master: {propshare_instances} instances, {propshare_files} files{COLOR_RESET}")
                     print(f"📊 {COLOR_BLUE}baseline-logging: {baseline_instances} instances, {baseline_files} files{COLOR_RESET}")
                     print(f"🎯 {COLOR_BOLD}Ready for performance comparison analysis!{COLOR_RESET}")
             else:
@@ -1577,7 +1577,7 @@ class BitTorrentDeployer:
             print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 BitTorrent Network Test with Branch Comparison Completed!{COLOR_RESET}")
             print(f"{COLOR_CYAN}⚙️  All instances completed setup in parallel{COLOR_RESET}")
             print(f"{COLOR_BLUE}📥 {self.total_leecher_count} leechers started first with staggered timing and branch distribution{COLOR_RESET}")
-            print(f"   {COLOR_GREEN}🔀 {proportion_propshare:.0%} used feat/proportional-share branch{COLOR_RESET}")
+            print(f"   {COLOR_GREEN}🔀 {proportion_propshare:.0%} used master branch{COLOR_RESET}")
             print(f"   {COLOR_BLUE}📊 {(1-proportion_propshare):.0%} used baseline-logging branch{COLOR_RESET}")
             print(f"{COLOR_GREEN}🌱 {self.total_seeder_count} seeders started in parallel after leechers{COLOR_RESET}")
             print(f"{COLOR_MAGENTA}📁 Project files collected via SCP from both branch types{COLOR_RESET}")
@@ -1585,7 +1585,7 @@ class BitTorrentDeployer:
             print(f"{COLOR_CYAN}📊 Log files include branch names: *-feat-proportional-share.log, *-baseline-logging.log{COLOR_RESET}") 
             if total_files > 0:
                 print(f"{COLOR_BOLD}{COLOR_CYAN}📁 {total_files} project files saved in: {LOGS_DIR}/{self.run_name}/project_files/{COLOR_RESET}")
-                print(f"{COLOR_BOLD}🎯 Ready for feat/proportional-share vs baseline-logging performance comparison!{COLOR_RESET}")
+                print(f"{COLOR_BOLD}🎯 Ready for master vs baseline-logging performance comparison!{COLOR_RESET}")
             
             return self.handler.completion_status
             
