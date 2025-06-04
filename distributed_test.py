@@ -13,6 +13,8 @@ POST_LEECHERS_WAIT_SECONDS = 10     # Wait after all leechers start before seede
 # Seeders start in parallel (no interval needed)
 
 # Constants
+# File Paths and Names
+DEFAULT_CONFIG_PATH = "config.yaml"
 LOGS_DIR = "logs"
 TORRENT_TEMP_DIR = "/tmp/torrents"
 SEED_TEMP_DIR = "/tmp/seed"
@@ -96,11 +98,6 @@ import sys
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor
-
-# File Paths and Names
-DEFAULT_CONFIG_PATH = "config.yaml"
-DEFAULT_CONFIG_PATH = os.environ.get('CPATH', DEFAULT_CONFIG_PATH)
-print(f"{COLOR_GREEN}Using config path: {DEFAULT_CONFIG_PATH}{COLOR_RESET}")
 
 class Config:
     def __init__(self, config_path=DEFAULT_CONFIG_PATH):
@@ -679,9 +676,46 @@ upload_csv() {{
     done
 }}
 
+# Continuous CSV monitoring and upload (runs in background)
+monitor_and_upload_csv() {{
+    UPLOADED_FILES_LIST="/tmp/uploaded_csvs.txt"
+    touch "$UPLOADED_FILES_LIST"
+    
+    while true; do
+        # Find all CSV files in the project directory
+        find {BITTORRENT_PROJECT_DIR} -name "*.csv" -type f | while read csv_file; do
+            if [ -f "$csv_file" ]; then
+                csv_filename=$(basename "$csv_file")
+                csv_full_path=$(realpath "$csv_file")
+                
+                # Check if this file has already been uploaded
+                if ! grep -q "$csv_full_path" "$UPLOADED_FILES_LIST" 2>/dev/null; then
+                    # Upload the new CSV file
+                    if curl -X POST -F "instance_id={instance_id}" -F "csv_filename=$csv_filename" -F "csv_file=@$csv_file" http://{controller_ip}:{controller_port}{CSV_ENDPOINT} 2>/dev/null; then
+                        # Mark as uploaded
+                        echo "$csv_full_path" >> "$UPLOADED_FILES_LIST"
+                        send_log "Live uploaded CSV: $csv_filename"
+                    fi
+                fi
+            fi
+        done
+        
+        # Wait 5 seconds before next check
+        sleep 5
+    done
+}}
+
 cleanup() {{
     send_log "Instance {instance_id} shutting down"
+    
+    # Stop background CSV monitoring if running
+    if [ ! -z "$CSV_MONITOR_PID" ]; then
+        kill $CSV_MONITOR_PID 2>/dev/null || true
+    fi
+    
+    # Final CSV collection (in case any were missed)
     upload_csv
+    
     [ -f {LOG_FILE_PATH} ] && curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
     curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "interrupted"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT} || true
 }}
@@ -779,6 +813,11 @@ done
 echo "=== Start Signal Received ==="
 send_log "Start signal received - beginning BitTorrent execution..."
 
+# Start background CSV monitoring (checks every 5 seconds)
+monitor_and_upload_csv &
+CSV_MONITOR_PID=$!
+send_log "Started continuous CSV monitoring (PID: $CSV_MONITOR_PID)"
+
 # Start log streaming
 tail -f /tmp/startup.log | while read line; do send_log "STARTUP: $line"; sleep 0.5; done &
 
@@ -804,10 +843,17 @@ fi
 echo "=== BitTorrent Completed ==="
 send_log "BitTorrent client finished"
 
+# Stop background CSV monitoring
+if [ ! -z "$CSV_MONITOR_PID" ]; then
+    kill $CSV_MONITOR_PID 2>/dev/null || true
+    send_log "Stopped continuous CSV monitoring"
+fi
+
 # Stop log streaming
 pkill -f "tail -f" 2>/dev/null || true
 
 echo "=== Final Steps ==="
+send_log "Final CSV collection (continuous monitoring was active during execution)..."
 upload_csv
 send_log "Sending final logs to controller..."
 curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
@@ -1320,3 +1366,11 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n{COLOR_RED}💥 Fatal error: {e}{COLOR_RESET}")
         sys.exit(1)
+        
+"""
+> Ensure that CSV files are being sent to controller (including progress one)
+> Stop controller program when all leechers are done
+> Propshare vs baseline-logging branch for leechers
+> Run experiments
+
+"""
