@@ -239,6 +239,8 @@ class PeersManager(Thread):
             logging.error("Unknown message")
 
     def update_unchoked_regular_peers(self, seed_mode: bool = False) -> None:
+        logging.info("\033[1;35m[Regular unchoking] [ENTERING] Updating unchoked peers\033[0m")
+        
         prev_unchoked = self.unchoked_peers.copy()
 
         if not seed_mode:
@@ -262,6 +264,8 @@ class PeersManager(Thread):
                 self.choking_logger.log_regular_unchoke(peer)
     
     def update_unchoked_optimistic_peers(self) -> None:
+        logging.info("\033[1;35m[Optimistic unchoking] [ENTERING] Updating optimistically unchoked peer\033[0m")
+        
         eligible_peers = [peer for peer in self.peers if peer.is_interested() and peer.am_choking()]
         if not eligible_peers:
             logging.info("\033[1;35m[Optimistic unchoking] No eligible peers\033[0m")
