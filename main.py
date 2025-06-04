@@ -194,10 +194,23 @@ class Run(object):
         # logging.info(f"[FILE SIZE] {elapsed_time:.3f}, {size_of_file}")
         
         # Log the name of each directory in the cwd and its size
-        for root, dirs, files in os.walk(os.getcwd()):
+        # for root, dirs, files in os.walk(os.getcwd()):
+        #     logging.info(f"[TERM-DIRECTORY-SIZE] Really, we're looking for: {self.torrent_dir} in {root} @ {elapsed_time}")
+        #     for name in dirs:
+        #         dir_path = os.path.join(root, name)
+        #         if os.path.isdir(dir_path):
+        #             if '.git' in dir_path:
+        #                 continue
+        #             size = sum(os.path.getsize(os.path.join(dir_path, f)) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)))
+        #             logging.info(f"[TERM-DIRECTORY-SIZE] {dir_path}: {size} @ {elapsed_time}")
+        
+        for root, dirs, files in os.walk("/tmp"):
+            logging.info(f"[TERM-DIRECTORY-SIZE] Really, we're looking for: {self.torrent_dir} in {root} @ {elapsed_time}")
             for name in dirs:
                 dir_path = os.path.join(root, name)
                 if os.path.isdir(dir_path):
+                    if '.git' in dir_path:
+                        continue
                     size = sum(os.path.getsize(os.path.join(dir_path, f)) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)))
                     logging.info(f"[TERM-DIRECTORY-SIZE] {dir_path}: {size} @ {elapsed_time}")
 
