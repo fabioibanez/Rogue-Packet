@@ -1,6 +1,7 @@
 # helpers.py
 # Author: Shounak Ray
 
+import logging
 import pprint
 import shutil
 import threading
@@ -61,6 +62,7 @@ def plot_dirsize_overtime(dir_path: str, stop_event: threading.Event, save_path:
 
 def save_download_progress(dir_path: str, stop_event: threading.Event, save_path: str) -> None:
     """Save download progress to CSV file."""
+    logging.info(f"\033[1;32m[UTILITY] Saving download progress to {save_path}\033[0m")
     while not stop_event.is_set():
         with open(save_path, 'a') as f:
             f.write(f"{dir_path},{get_dir_size(dir_path)},{time.time()}\n") 
