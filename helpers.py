@@ -63,7 +63,15 @@ def save_download_progress(dir_path: str, stop_event: threading.Event, save_path
     """Save download progress to CSV file."""
     while not stop_event.is_set():
         with open(save_path, 'a') as f:
-            f.write(f"{dir_path},{get_dir_size(dir_path)},{time.time()}\n") 
+            # f.write(f"{dir_path},{get_dir_size(dir_path)},{time.time()}\n")
+            # write the size of all files / folders in the directory
+            for root, dirs, files in os.walk(dir_path):
+                for name in files:
+                    file_path = os.path.join(root, name)
+                    if not os.path.islink(file_path):
+                        size = os.path.getsize(file_path)
+                        f.write(f"{file_path},{size},{time.time()}\n")
+        
         time.sleep(PLOT_INTERVAL)
 
 def cleanup_torrent_download(torrent_file: str) -> None:
