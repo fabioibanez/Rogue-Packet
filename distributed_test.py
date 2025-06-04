@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Enhanced BitTorrent Network Deployment Script with Two-Phase Deployment
-- Phase 1: Deploy all seeders first and wait for them to be ready
-- Phase 2: Deploy leechers after seeders are serving
-- Includes CSV file collection from BitTorrent clients
+- Phase 1: Deploy all instances first and wait for them to be ready
+- Phase 2: Deploy leechers after instances are serving
+- Uses SCP to collect stripped project directories from BitTorrent clients
 """
 
 # Timing Constants for Coordinated Startup
@@ -20,12 +20,13 @@ BITTORRENT_PROJECT_DIR = "/tmp/bittorrent-project"
 LOG_FILE_PATH = "/tmp/bittorrent.log"
 TORRENT_FILENAME = "thetorrentfile.torrent"
 SEED_FILENAME = "seed_file"
+SSH_KEY_PATH = "/tmp/bittorrent_key"
+STRIPPED_DIR_NAME = "stripped_project"
 
 # API Endpoints
 LOGS_ENDPOINT = '/logs'
 STREAM_ENDPOINT = '/stream'
 COMPLETION_ENDPOINT = '/completion'
-CSV_ENDPOINT = '/csv'
 SETUP_COMPLETE_ENDPOINT = '/setup_complete'
 START_SIGNAL_ENDPOINT = '/start_signal'
 IP_API_URL = 'https://api.ipify.org'
@@ -52,7 +53,7 @@ DEFAULT_CONTROLLER_PORT = 8080
 
 # Installation Commands
 UPDATE_CMD = "apt-get update"
-INSTALL_PACKAGES_CMD = "apt-get install -y git python3 python3-pip python3-dev python3-venv build-essential libssl-dev libffi-dev"
+INSTALL_PACKAGES_CMD = "apt-get install -y git python3 python3-pip python3-dev python3-venv build-essential libssl-dev libffi-dev openssh-server"
 INSTALL_DEPS_CMD = "python3 -m pip install -r requirements.txt --timeout 300"
 SHUTDOWN_CMD = "shutdown -h now"
 
@@ -93,6 +94,7 @@ import boto3
 import random
 import signal
 import sys
+import subprocess
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor
@@ -126,7 +128,6 @@ class LogHandler(BaseHTTPRequestHandler):
     logs_dir = LOGS_DIR
     completion_status = {}
     instance_status = {}
-    csv_files = {}  # Track CSV files received
     setup_completions = {}  # Track setup completion
     start_signals = {}  # Track start signals sent
     run_name = None
@@ -140,7 +141,7 @@ class LogHandler(BaseHTTPRequestHandler):
     STATUS_SETUP_COMPLETE = "setup_complete"
     STATUS_WAITING_START = "waiting_start"
     STATUS_RUNNING = "running"
-    STATUS_COLLECTING_CSV = "collecting_csv"
+    STATUS_COLLECTING_FILES = "collecting_files"
     STATUS_COMPLETED = "completed"
     STATUS_ERROR = "error"
     
@@ -148,9 +149,9 @@ class LogHandler(BaseHTTPRequestHandler):
     def set_run_name(cls, run_name):
         cls.run_name = run_name
         run_dir = os.path.join(cls.logs_dir, run_name)
-        csv_dir = os.path.join(run_dir, "csv_files")
+        files_dir = os.path.join(run_dir, "project_files")
         os.makedirs(run_dir, exist_ok=True)
-        os.makedirs(csv_dir, exist_ok=True)
+        os.makedirs(files_dir, exist_ok=True)
     
     @classmethod
     def update_instance_status(cls, instance_id, status, progress=None, message=None):
@@ -204,32 +205,21 @@ class LogHandler(BaseHTTPRequestHandler):
                 print(f"  {COLOR_GREEN}🌱 Seeders:{COLOR_RESET}")
                 for instance_id, info in roles['seeders']:
                     status_emoji, status_text = cls._get_status_display(info['status'], info.get('progress'))
-                    csv_info = cls._get_csv_info(instance_id)
-                    print(f"    {status_emoji} {instance_id}: {status_text}{csv_info}")
+                    print(f"    {status_emoji} {instance_id}: {status_text}")
             
             if roles['leechers']:
                 print(f"  {COLOR_BLUE}📥 Leechers:{COLOR_RESET}")
                 for instance_id, info in roles['leechers']:
                     status_emoji, status_text = cls._get_status_display(info['status'], info.get('progress'))
-                    csv_info = cls._get_csv_info(instance_id)
-                    print(f"    {status_emoji} {instance_id}: {status_text}{csv_info}")
+                    print(f"    {status_emoji} {instance_id}: {status_text}")
         
         # Summary
         total_instances = len(cls.instance_status)
         completed_count = len([i for i in cls.instance_status.values() if i['status'] == cls.STATUS_COMPLETED])
         running_count = len([i for i in cls.instance_status.values() if i['status'] == cls.STATUS_RUNNING])
-        csv_count = len(cls.csv_files)
         
         print(f"\n{COLOR_BOLD}📊 Summary:{COLOR_RESET}")
-        print(f"  Total: {total_instances} | Running: {running_count} | Completed: {completed_count} | CSV Files: {csv_count}")
-    
-    @classmethod
-    def _get_csv_info(cls, instance_id):
-        """Get CSV file info for display"""
-        if instance_id in cls.csv_files:
-            csv_count = len(cls.csv_files[instance_id])
-            return f" {COLOR_CYAN}[{csv_count} CSV]{COLOR_RESET}"
-        return ""
+        print(f"  Total: {total_instances} | Running: {running_count} | Completed: {completed_count}")
     
     @classmethod 
     def _get_status_display(cls, status, progress=None):
@@ -242,7 +232,7 @@ class LogHandler(BaseHTTPRequestHandler):
             cls.STATUS_SETUP_COMPLETE: ("✅", "Setup complete"),
             cls.STATUS_WAITING_START: ("⏳", "Waiting for start signal"),
             cls.STATUS_RUNNING: ("🚀", f"Running BitTorrent {progress}%" if progress else "Running BitTorrent"),
-            cls.STATUS_COLLECTING_CSV: ("📊", "Collecting CSV files"),
+            cls.STATUS_COLLECTING_FILES: ("📊", "Collecting project files"),
             cls.STATUS_COMPLETED: ("🎉", "Completed"),
             cls.STATUS_ERROR: ("❌", "Error")
         }
@@ -261,8 +251,6 @@ class LogHandler(BaseHTTPRequestHandler):
             self._handle_stream()
         elif self.path == COMPLETION_ENDPOINT:
             self._handle_completion()
-        elif self.path == CSV_ENDPOINT:
-            self._handle_csv()
         elif self.path == SETUP_COMPLETE_ENDPOINT:
             self._handle_setup_complete()
         else:
@@ -275,57 +263,6 @@ class LogHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(HTTP_NOT_FOUND)
             self.end_headers()
-    
-    def _handle_csv(self):
-        """Handle CSV file uploads from instances"""
-        content_type = self.headers.get('Content-Type', '')
-        if not content_type.startswith('multipart/form-data'):
-            self.send_response(400)
-            self.end_headers()
-            return
-        
-        content_length = int(self.headers.get('Content-Length', 0))
-        post_data = self.rfile.read(content_length)
-        
-        boundary = content_type.split('boundary=')[1].encode()
-        parts = post_data.split(b'--' + boundary)
-        
-        instance_id = None
-        csv_filename = None
-        csv_data = None
-        
-        for part in parts:
-            if b'name="instance_id"' in part:
-                instance_id = part.split(b'\r\n\r\n')[1].split(b'\r\n')[0].decode()
-            elif b'name="csv_filename"' in part:
-                csv_filename = part.split(b'\r\n\r\n')[1].split(b'\r\n')[0].decode()
-            elif b'name="csv_file"' in part:
-                csv_data = part.split(b'\r\n\r\n', 1)[1].rsplit(b'\r\n', 1)[0]
-        
-        if instance_id and csv_filename and csv_data:
-            # Save CSV file
-            run_dir = os.path.join(self.logs_dir, self.run_name)
-            csv_dir = os.path.join(run_dir, "csv_files")
-            os.makedirs(csv_dir, exist_ok=True)
-            
-            csv_path = os.path.join(csv_dir, f"{instance_id}_{csv_filename}")
-            with open(csv_path, 'wb') as f:
-                f.write(csv_data)
-            
-            # Track CSV file
-            if instance_id not in self.csv_files:
-                self.csv_files[instance_id] = []
-            self.csv_files[instance_id].append({
-                'filename': csv_filename,
-                'path': csv_path,
-                'size': len(csv_data),
-                'timestamp': time.time()
-            })
-            
-            print(f"{COLOR_CYAN}📊 CSV file received: {instance_id}/{csv_filename} ({len(csv_data)} bytes){COLOR_RESET}")
-        
-        self.send_response(HTTP_OK)
-        self.end_headers()
     
     def _handle_setup_complete(self):
         """Handle setup completion notifications from instances"""
@@ -456,8 +393,8 @@ class LogHandler(BaseHTTPRequestHandler):
             self.update_instance_status(instance_id, self.STATUS_WAITING_START)
         elif 'starting bittorrent client' in log_lower:
             self.update_instance_status(instance_id, self.STATUS_RUNNING)
-        elif 'collecting csv files' in log_lower:
-            self.update_instance_status(instance_id, self.STATUS_COLLECTING_CSV)
+        elif 'collecting project files' in log_lower:
+            self.update_instance_status(instance_id, self.STATUS_COLLECTING_FILES)
         elif 'bittorrent client finished' in log_lower:
             self.update_instance_status(instance_id, self.STATUS_COMPLETED)
         elif not is_seeder and ('downloaded' in log_lower or 'progress' in log_lower or '%' in log_chunk):
@@ -534,6 +471,43 @@ class LogServer:
     def stop(self):
         if self.server:
             self.server.shutdown()
+
+class SSHKeyManager:
+    """Manages SSH key generation and distribution for SCP transfers"""
+    
+    def __init__(self, key_path=SSH_KEY_PATH):
+        self.key_path = key_path
+        self.public_key_path = f"{key_path}.pub"
+        self.generate_key_pair()
+    
+    def generate_key_pair(self):
+        """Generate SSH key pair for instance communication"""
+        if os.path.exists(self.key_path):
+            os.remove(self.key_path)
+        if os.path.exists(self.public_key_path):
+            os.remove(self.public_key_path)
+        
+        try:
+            subprocess.run([
+                'ssh-keygen', '-t', 'rsa', '-b', '2048', '-f', self.key_path, 
+                '-N', '', '-C', 'bittorrent-controller'
+            ], check=True, capture_output=True)
+            print(f"{COLOR_GREEN}✓ SSH key pair generated: {self.key_path}{COLOR_RESET}")
+        except subprocess.CalledProcessError as e:
+            print(f"{COLOR_RED}✗ Failed to generate SSH key pair: {e}{COLOR_RESET}")
+            raise
+    
+    def get_public_key(self):
+        """Get the public key content"""
+        with open(self.public_key_path, 'r') as f:
+            return f.read().strip()
+    
+    def cleanup(self):
+        """Clean up SSH key files"""
+        for key_file in [self.key_path, self.public_key_path]:
+            if os.path.exists(key_file):
+                os.remove(key_file)
+                print(f"{COLOR_GREEN}✓ Removed SSH key: {key_file}{COLOR_RESET}")
 
 class AWSManager:
     def __init__(self, aws_config):
@@ -660,7 +634,7 @@ class AWSManager:
         except Exception as e:
             return None, f"Failed to lookup AMI in {region}: {str(e)}"
     
-    def generate_user_data(self, github_repo, torrent_url, seed_fileurl, role, controller_ip, controller_port, instance_id):
+    def generate_user_data(self, github_repo, torrent_url, seed_fileurl, role, controller_ip, controller_port, instance_id, public_key):
         script = f"""#!/bin/bash
 set -x
 exec > >(tee -a /tmp/startup.log) 2>&1
@@ -669,19 +643,64 @@ send_log() {{
     curl -s -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "log_chunk": "'"$1"'", "timestamp": '$(date +%s)'}}' http://{controller_ip}:{controller_port}{STREAM_ENDPOINT} || true
 }}
 
-upload_csv() {{
-    send_log "Collecting CSV files from project directory..."
-    find {BITTORRENT_PROJECT_DIR} -name "*.csv" -type f | while read f; do
-        if [ -f "$f" ]; then
-            curl -X POST -F "instance_id={instance_id}" -F "csv_filename=$(basename "$f")" -F "csv_file=@$f" http://{controller_ip}:{controller_port}{CSV_ENDPOINT} || true
-            send_log "Uploaded CSV: $(basename "$f")"
+strip_and_transfer_files() {{
+    send_log "Collecting project files with 'torrent' in name..."
+    
+    # Create stripped directory
+    STRIPPED_DIR="/tmp/{STRIPPED_DIR_NAME}"
+    mkdir -p "$STRIPPED_DIR"
+    
+    # Change to project directory
+    cd {BITTORRENT_PROJECT_DIR}
+    
+    # Remove the torrents folder from the repo if it exists
+    if [ -d "torrents" ]; then
+        rm -rf torrents
+        send_log "Removed torrents folder from repository"
+    fi
+    
+    # Find and copy files containing 'torrent' in their name
+    find . -type f -name "*torrent*" -exec cp --parents {{}} "$STRIPPED_DIR/" \\; 2>/dev/null || true
+    
+    # Also copy any .csv files that might contain results
+    find . -type f -name "*.csv" -exec cp --parents {{}} "$STRIPPED_DIR/" \\; 2>/dev/null || true
+    
+    # Create a summary of what we're transferring
+    echo "=== Stripped Directory Contents ===" > "$STRIPPED_DIR/transfer_summary.txt"
+    find "$STRIPPED_DIR" -type f >> "$STRIPPED_DIR/transfer_summary.txt"
+    
+    send_log "Files prepared for transfer: $(find "$STRIPPED_DIR" -type f | wc -l) files"
+    
+    # Transfer via SCP with retry logic
+    MAX_RETRIES=3
+    RETRY_COUNT=0
+    
+    while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+        send_log "Attempting SCP transfer (attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)..."
+        
+        if scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -r "$STRIPPED_DIR" ubuntu@{controller_ip}:/tmp/{instance_id}_files/; then
+            send_log "SCP transfer successful"
+            break
+        else
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                send_log "SCP transfer failed, retrying in 5 seconds..."
+                sleep 5
+            else
+                send_log "SCP transfer failed after $MAX_RETRIES attempts"
+            fi
         fi
     done
 }}
 
 cleanup() {{
     send_log "Instance {instance_id} shutting down"
-    upload_csv
+    
+    # Only transfer files for leechers (they download and generate results)
+    if [ "{role}" == "{ROLE_LEECHER}" ]; then
+        strip_and_transfer_files
+    fi
+    
     [ -f {LOG_FILE_PATH} ] && curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT} || true
     curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "interrupted"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT} || true
 }}
@@ -700,6 +719,19 @@ echo "=== Installing Packages ==="
 send_log "Installing system packages..."
 {INSTALL_PACKAGES_CMD} tree
 send_log "System packages installation completed"
+
+echo "=== SSH Setup ==="
+send_log "Setting up SSH access..."
+systemctl start ssh
+systemctl enable ssh
+
+# Set up SSH key for controller access
+mkdir -p /home/ubuntu/.ssh
+echo "{public_key}" >> /home/ubuntu/.ssh/authorized_keys
+chmod 600 /home/ubuntu/.ssh/authorized_keys
+chmod 700 /home/ubuntu/.ssh
+chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+send_log "SSH access configured"
 
 echo "=== Network Configuration ==="
 send_log "Configuring network settings..."
@@ -808,7 +840,12 @@ send_log "BitTorrent client finished"
 pkill -f "tail -f" 2>/dev/null || true
 
 echo "=== Final Steps ==="
-upload_csv
+
+# Transfer files only for leechers
+if [ "{role}" == "{ROLE_LEECHER}" ]; then
+    strip_and_transfer_files
+fi
+
 send_log "Sending final logs to controller..."
 curl -X POST -F "instance_id={instance_id}" -F "logfile=@{LOG_FILE_PATH}" http://{controller_ip}:{controller_port}{LOGS_ENDPOINT}
 curl -X POST -H "Content-Type: application/json" -d '{{"instance_id": "{instance_id}", "status": "{STATUS_COMPLETE}"}}' http://{controller_ip}:{controller_port}{COMPLETION_ENDPOINT}
@@ -845,6 +882,7 @@ class BitTorrentDeployer:
         self.config = Config(config_path)
         self.aws_manager = AWSManager(self.config.get_aws_config())
         self.log_server = LogServer(self.config.get_controller_port())
+        self.ssh_manager = SSHKeyManager()
         self.controller_ip = self._get_public_ip()
         self.region_instances = {}
         self.cleanup_in_progress = False
@@ -898,16 +936,16 @@ class BitTorrentDeployer:
                             file_size = os.path.getsize(file_path)
                             print(f"{COLOR_GREEN}📝 {file} ({file_size} bytes){COLOR_RESET}")
                 
-                # Show CSV files collected
-                csv_dir = os.path.join(run_dir, "csv_files")
-                if os.path.exists(csv_dir):
-                    csv_files = [f for f in os.listdir(csv_dir) if f.endswith('.csv')]
-                    if csv_files:
-                        print(f"\n{COLOR_BOLD}=== CSV Files Collected ==={COLOR_RESET}")
-                        for csv_file in csv_files:
-                            csv_path = os.path.join(csv_dir, csv_file)
-                            csv_size = os.path.getsize(csv_path)
-                            print(f"{COLOR_CYAN}📊 {csv_file} ({csv_size} bytes){COLOR_RESET}")
+                # Show project files collected
+                files_dir = os.path.join(run_dir, "project_files")
+                if os.path.exists(files_dir):
+                    project_dirs = [d for d in os.listdir(files_dir) if os.path.isdir(os.path.join(files_dir, d))]
+                    if project_dirs:
+                        print(f"\n{COLOR_BOLD}=== Project Files Collected ==={COLOR_RESET}")
+                        for project_dir in project_dirs:
+                            project_path = os.path.join(files_dir, project_dir)
+                            file_count = len([f for f in os.listdir(project_path) if os.path.isfile(os.path.join(project_path, f))])
+                            print(f"{COLOR_CYAN}📁 {project_dir} ({file_count} files){COLOR_RESET}")
                 
                 if self.handler.completion_status:
                     print(f"\n{COLOR_BOLD}=== Instance Status ==={COLOR_RESET}")
@@ -939,18 +977,64 @@ class BitTorrentDeployer:
             if self.log_server:
                 self.log_server.stop()
                 print(f"{COLOR_GREEN}✓ Log server stopped{COLOR_RESET}")
+            
+            if self.ssh_manager:
+                self.ssh_manager.cleanup()
                 
         except Exception as e:
             print(f"{COLOR_RED}⚠ Error during instance cleanup: {e}{COLOR_RESET}")
         
         print(f"\n{COLOR_BOLD}{COLOR_YELLOW}🛑 Emergency cleanup completed{COLOR_RESET}")
         print(f"{COLOR_BOLD}{COLOR_BLUE}📁 Partial logs saved in: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
-        if os.path.exists(os.path.join(LOGS_DIR, self.run_name, "csv_files")):
-            print(f"{COLOR_BOLD}{COLOR_CYAN}📊 CSV files saved in: {LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
+        if os.path.exists(os.path.join(LOGS_DIR, self.run_name, "project_files")):
+            print(f"{COLOR_BOLD}{COLOR_CYAN}📁 Project files saved in: {LOGS_DIR}/{self.run_name}/project_files/{COLOR_RESET}")
     
     def _get_public_ip(self):
         response = requests.get(IP_API_URL)
         return response.text
+    
+    def _setup_scp_collection(self):
+        """Set up directories for SCP file collection"""
+        run_dir = os.path.join(LOGS_DIR, self.run_name)
+        files_dir = os.path.join(run_dir, "project_files")
+        os.makedirs(files_dir, exist_ok=True)
+        
+        # Create individual directories for each instance
+        for region in self.config.get_regions():
+            for i in range(region['leechers']):  # Only leechers transfer files
+                instance_id = f"{region['name']}-{ROLE_LEECHER}-{i}"
+                instance_dir = os.path.join("/tmp", f"{instance_id}_files")
+                os.makedirs(instance_dir, exist_ok=True)
+        
+        print(f"{COLOR_GREEN}✓ SCP collection directories prepared{COLOR_RESET}")
+    
+    def _collect_transferred_files(self):
+        """Collect files that were transferred via SCP"""
+        print(f"\n{COLOR_BOLD}=== Collecting Transferred Files ==={COLOR_RESET}")
+        
+        run_dir = os.path.join(LOGS_DIR, self.run_name)
+        files_dir = os.path.join(run_dir, "project_files")
+        
+        total_files = 0
+        for region in self.config.get_regions():
+            for i in range(region['leechers']):
+                instance_id = f"{region['name']}-{ROLE_LEECHER}-{i}"
+                temp_dir = f"/tmp/{instance_id}_files"
+                
+                if os.path.exists(temp_dir):
+                    # Move to permanent location
+                    final_dir = os.path.join(files_dir, instance_id)
+                    if not os.path.exists(final_dir):
+                        subprocess.run(['mv', temp_dir, final_dir], check=False)
+                        
+                        # Count files
+                        if os.path.exists(final_dir):
+                            file_count = len([f for f in os.listdir(final_dir) if os.path.isfile(os.path.join(final_dir, f))])
+                            total_files += file_count
+                            print(f"{COLOR_GREEN}✓ Collected {file_count} files from {instance_id}{COLOR_RESET}")
+        
+        print(f"{COLOR_CYAN}📁 Total files collected: {total_files}{COLOR_RESET}")
+        return total_files
     
     def _lookup_and_validate_amis(self):
         """Look up and validate AMIs for all regions"""
@@ -976,7 +1060,7 @@ class BitTorrentDeployer:
         print(f"{COLOR_GREEN}✅ All AMIs found successfully across {len(all_regions)} regions{COLOR_RESET}")
         return region_ami_map, None
     
-    def deploy_region(self, region_config, torrent_url, seed_fileurl, ami_id):
+    def deploy_region(self, region_config, torrent_url, seed_fileurl, ami_id, public_key):
         """Deploy all instances (seeders and leechers) for this region"""
         region_name = region_config['name']
         instance_ids = []
@@ -999,7 +1083,8 @@ class BitTorrentDeployer:
                 ROLE_SEEDER,
                 self.controller_ip,
                 self.config.get_controller_port(),
-                instance_id
+                instance_id,
+                public_key
             )
             
             ec2_id = self.aws_manager.launch_instance(region_name, user_data, ami_id, security_group_id)
@@ -1015,7 +1100,8 @@ class BitTorrentDeployer:
                 ROLE_LEECHER,
                 self.controller_ip,
                 self.config.get_controller_port(),
-                instance_id
+                instance_id,
+                public_key
             )
             
             ec2_id = self.aws_manager.launch_instance(region_name, user_data, ami_id, security_group_id)
@@ -1108,14 +1194,15 @@ class BitTorrentDeployer:
     
     def run(self):
         try:
-            print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 Enhanced BitTorrent Network Deployment with CSV Collection{COLOR_RESET}")
+            print(f"{COLOR_BOLD}{COLOR_MAGENTA}🚀 Enhanced BitTorrent Network Deployment with SCP File Collection{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 Run Name: {self.run_name}{COLOR_RESET}")
             print(f"{COLOR_BOLD}{COLOR_BLUE}💾 Logs Directory: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
-            print(f"{COLOR_BOLD}{COLOR_CYAN}📊 CSV Files Directory: {LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
+            print(f"{COLOR_BOLD}{COLOR_CYAN}📁 Project Files Directory: {LOGS_DIR}/{self.run_name}/project_files/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C at any time for graceful cleanup{COLOR_RESET}")
             print(f"{COLOR_CYAN}⚙️  Phase 1: All instances complete setup in parallel{COLOR_RESET}")
             print(f"{COLOR_BLUE}📥 Phase 2: Start leechers first with staggered timing{COLOR_RESET}")
             print(f"{COLOR_GREEN}🌱 Phase 3: Start seeders in parallel after leechers{COLOR_RESET}")
+            print(f"{COLOR_MAGENTA}📁 Phase 4: SCP collect project files from leechers{COLOR_RESET}")
             
             # Look up AMIs
             region_ami_map, ami_error = self._lookup_and_validate_amis()
@@ -1123,22 +1210,28 @@ class BitTorrentDeployer:
                 print(f"\n{COLOR_RED}💥 AMI validation failed: {ami_error}{COLOR_RESET}")
                 return {}
             
+            # Set up SCP collection
+            self._setup_scp_collection()
+            
             # Start log server
             self.handler = self.log_server.start()
             print(f"\n{COLOR_GREEN}🌐 Log server started on port {self.config.get_controller_port()}{COLOR_RESET}")
             print(f"{COLOR_GREEN}🌍 Controller IP: {self.controller_ip}{COLOR_RESET}")
-            print(f"{COLOR_CYAN}📊 CSV collection endpoint: /csv{COLOR_RESET}")
+            print(f"{COLOR_CYAN}🔑 SSH key generated for SCP transfers{COLOR_RESET}")
             
             # Get URLs
             torrent_url = self.config.get_bittorrent_config()['torrent_url']
             seed_fileurl = self.config.get_bittorrent_config()['seed_fileurl']
             github_repo = self.config.get_bittorrent_config()['github_repo']
+            public_key = self.ssh_manager.get_public_key()
             
             print(f"\n{COLOR_BOLD}=== Configuration ==={COLOR_RESET}")
             print(f"📂 GitHub repo: {github_repo}")
             print(f"📁 Torrent URL: {torrent_url}")
             print(f"🌱 Seed file URL: {seed_fileurl}")
             print(f"🔒 Security: Creating All-All security groups (matching your setup)")
+            print(f"📁 File Collection: SCP transfer of stripped project directories")
+            print(f"🗑️  Strip Criteria: Files with 'torrent' in name, remove 'torrents' folder")
             
             print(f"\n{COLOR_BOLD}=== Deployment Plan ==={COLOR_RESET}")
             for region in self.config.get_regions():
@@ -1150,6 +1243,7 @@ class BitTorrentDeployer:
             print(f"  • Leecher start interval: {LEECHER_START_INTERVAL_SECONDS}s (leechers start first)")
             print(f"  • Post-leechers wait: {POST_LEECHERS_WAIT_SECONDS}s")
             print(f"  • Seeders: All start in parallel (after leechers)")
+            print(f"{COLOR_MAGENTA}📁 File Collection: Only leechers transfer project files via SCP{COLOR_RESET}")
             
             # =================================================================
             # DEPLOY ALL INSTANCES (SETUP ONLY)
@@ -1157,6 +1251,7 @@ class BitTorrentDeployer:
             print(f"\n{COLOR_BOLD}{COLOR_CYAN}=== Deploying All Instances for Setup ==={COLOR_RESET}")
             print(f"⚙️  Deploying {self.total_instance_count} instances across {len(self.config.get_regions())} regions...")
             print(f"📦 All instances will complete setup in parallel, then wait for coordinated start signals")
+            print(f"🔑 SSH access configured for SCP file transfers")
             
             futures = []
             with ThreadPoolExecutor() as executor:
@@ -1168,7 +1263,8 @@ class BitTorrentDeployer:
                             region,
                             torrent_url,
                             seed_fileurl,
-                            ami_id
+                            ami_id,
+                            public_key
                         )
                     )
                 
@@ -1214,10 +1310,10 @@ class BitTorrentDeployer:
             print("⚙️  All instances completed setup and received coordinated start signals")
             print("📥 Leechers started first with staggered timing")
             print("🌱 Seeders started in parallel after leechers were established")  
-            print("📊 CSV files will be automatically collected after BitTorrent completion")
+            print("📁 Project files will be automatically collected via SCP after BitTorrent completion")
             print(f"⏱️  Will wait up to {self.config.get_timeout_minutes()} minutes for all to complete...")
-            print(f"📁 Logs being saved to: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
-            print(f"📊 CSV files being saved to: {COLOR_CYAN}{LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
+            print(f"📝 Logs being saved to: {COLOR_YELLOW}{LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
+            print(f"📁 Project files being saved to: {COLOR_CYAN}{LOGS_DIR}/{self.run_name}/project_files/{COLOR_RESET}")
             print(f"{COLOR_YELLOW}💡 Press Ctrl+C anytime to stop and cleanup{COLOR_RESET}")
             print("\n" + "=" * 80)
             
@@ -1236,10 +1332,17 @@ class BitTorrentDeployer:
                 print(f"\n{COLOR_YELLOW}⚠ Timeout reached, some instances may not have completed{COLOR_RESET}")
                 LogHandler.display_status_dashboard()
             
-            # Process logs and CSV files
+            # Wait a bit for SCP transfers to complete
+            print(f"\n{COLOR_CYAN}⏳ Waiting for final SCP transfers to complete...{COLOR_RESET}")
+            time.sleep(30)
+            
+            # Collect transferred files
+            total_files = self._collect_transferred_files()
+            
+            # Process logs and project files
             print(f"\n{COLOR_BOLD}=== Results Summary ==={COLOR_RESET}")
             run_dir = os.path.join(LOGS_DIR, self.run_name)
-            csv_dir = os.path.join(run_dir, "csv_files")
+            files_dir = os.path.join(run_dir, "project_files")
             
             for instance_id, status in self.handler.completion_status.items():
                 final_log = os.path.join(run_dir, f"{instance_id}.log")
@@ -1253,28 +1356,29 @@ class BitTorrentDeployer:
                 if os.path.exists(stream_log):
                     print(f"  {COLOR_CYAN}📡 Stream log: {stream_log}{COLOR_RESET}")
                 
-                # Show CSV files for this instance
-                if instance_id in self.handler.csv_files:
-                    csv_info = self.handler.csv_files[instance_id]
-                    print(f"  {COLOR_CYAN}📊 CSV files: {len(csv_info)} files{COLOR_RESET}")
-                    for csv_file in csv_info:
-                        print(f"    📊 {csv_file['filename']} ({csv_file['size']} bytes)")
+                # Show project files for this instance (leechers only)
+                if 'leecher' in instance_id:
+                    instance_files_dir = os.path.join(files_dir, instance_id)
+                    if os.path.exists(instance_files_dir):
+                        file_count = len([f for f in os.listdir(instance_files_dir) if os.path.isfile(os.path.join(instance_files_dir, f))])
+                        print(f"  {COLOR_CYAN}📁 Project files: {file_count} files in {instance_files_dir}{COLOR_RESET}")
             
-            # CSV Summary
-            total_csv_files = sum(len(files) for files in self.handler.csv_files.values())
-            if total_csv_files > 0:
-                print(f"\n{COLOR_BOLD}=== CSV Files Summary ==={COLOR_RESET}")
-                print(f"{COLOR_CYAN}📊 Total CSV files collected: {total_csv_files}{COLOR_RESET}")
-                print(f"{COLOR_CYAN}📁 CSV files location: {csv_dir}{COLOR_RESET}")
+            # Project Files Summary
+            if total_files > 0:
+                print(f"\n{COLOR_BOLD}=== Project Files Summary ==={COLOR_RESET}")
+                print(f"{COLOR_CYAN}📁 Total project files collected: {total_files}{COLOR_RESET}")
+                print(f"{COLOR_CYAN}📂 Project files location: {files_dir}{COLOR_RESET}")
+                print(f"{COLOR_YELLOW}🗑️  Files filtered: Only files with 'torrent' in name, 'torrents' folder removed{COLOR_RESET}")
                 
-                if os.path.exists(csv_dir):
-                    all_csv_files = [f for f in os.listdir(csv_dir) if f.endswith('.csv')]
-                    for csv_file in all_csv_files:
-                        csv_path = os.path.join(csv_dir, csv_file)
-                        csv_size = os.path.getsize(csv_path)
-                        print(f"  📊 {csv_file} ({csv_size} bytes)")
+                # Show detailed breakdown
+                if os.path.exists(files_dir):
+                    for instance_dir in os.listdir(files_dir):
+                        instance_path = os.path.join(files_dir, instance_dir)
+                        if os.path.isdir(instance_path):
+                            file_count = len([f for f in os.listdir(instance_path) if os.path.isfile(os.path.join(instance_path, f))])
+                            print(f"  📁 {instance_dir}: {file_count} files")
             else:
-                print(f"\n{COLOR_YELLOW}⚠ No CSV files were collected{COLOR_RESET}")
+                print(f"\n{COLOR_YELLOW}⚠ No project files were collected{COLOR_RESET}")
             
             # Cleanup resources
             print(f"\n{COLOR_BOLD}=== Cleanup ==={COLOR_RESET}")
@@ -1287,17 +1391,20 @@ class BitTorrentDeployer:
             time.sleep(30)
             
             self.aws_manager.cleanup_security_groups()
+            self.ssh_manager.cleanup()
             
             self.log_server.stop()
             print(f"{COLOR_GREEN}✓ Log server stopped{COLOR_RESET}")
+            print(f"{COLOR_GREEN}✓ SSH keys cleaned up{COLOR_RESET}")
             
             print(f"\n{COLOR_BOLD}{COLOR_MAGENTA}🎉 Coordinated BitTorrent Network Test Completed!{COLOR_RESET}")
             print(f"{COLOR_CYAN}⚙️  All instances completed setup in parallel{COLOR_RESET}")
             print(f"{COLOR_BLUE}📥 {self.total_leecher_count} leechers started first with {LEECHER_START_INTERVAL_SECONDS}s intervals{COLOR_RESET}")
             print(f"{COLOR_GREEN}🌱 {self.total_seeder_count} seeders started in parallel after leechers{COLOR_RESET}")
-            print(f"{COLOR_BOLD}{COLOR_YELLOW}📁 All logs saved in: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
-            if total_csv_files > 0:
-                print(f"{COLOR_BOLD}{COLOR_CYAN}📊 {total_csv_files} CSV files saved in: {LOGS_DIR}/{self.run_name}/csv_files/{COLOR_RESET}")
+            print(f"{COLOR_MAGENTA}📁 Project files collected via SCP from leechers{COLOR_RESET}")
+            print(f"{COLOR_BOLD}{COLOR_YELLOW}📝 All logs saved in: {LOGS_DIR}/{self.run_name}/{COLOR_RESET}")
+            if total_files > 0:
+                print(f"{COLOR_BOLD}{COLOR_CYAN}📁 {total_files} project files saved in: {LOGS_DIR}/{self.run_name}/project_files/{COLOR_RESET}")
             
             return self.handler.completion_status
             
