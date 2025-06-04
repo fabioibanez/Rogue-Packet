@@ -715,7 +715,7 @@ send_log "Network configuration completed"
 
 echo "=== Cloning Repository ==="
 send_log "Cloning repository from {github_repo}"
-git clone -b feat/distribed {github_repo} {BITTORRENT_PROJECT_DIR}
+git clone -b vplex-revert2 {github_repo} {BITTORRENT_PROJECT_DIR}
 send_log "Repository cloned successfully"
 
 echo "=== Installing Dependencies ==="
