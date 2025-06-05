@@ -89,7 +89,7 @@ class BitTorrentMininet:
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
                  num_seeders=1, num_leechers=2, topology='single', delay='0ms', seeder_file=None, 
                  auto_install=True, interpreter="python3"):
-        self.torrent_file = torrent_file
+        self.torrent_file = os.path.abspath(torrent_file)
         self.verbose = verbose
         self.delete_torrent = delete_torrent
         self.seed = seed
@@ -212,8 +212,9 @@ class BitTorrentMininet:
             os.makedirs(working_dir, mode=0o777, exist_ok=True)
             os.chmod(working_dir, 0o777)
 
-        torrent_filename = os.path.basename(self.torrent_file)
-        cmd_parts = [self.interpreter, '-m', 'main', torrent_filename]
+        torrent_filename = self.torrent_file
+        main_path = os.path.join(os.path.dirname(__file__), "main.py")
+        cmd_parts = [sys.executable, main_path, torrent_filename]
         
         # Add required arguments
         cmd_parts.extend(['--local-ip', host_ip])
