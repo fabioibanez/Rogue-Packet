@@ -200,14 +200,18 @@ class BitTorrentMininet:
             raise RuntimeError("Network must be created before generating mock tracker")
         
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        mock_tracker_filename = f"mock_tracker_{timestamp}.json"
-        self.mock_tracker_path = os.path.join(self.MAIN_SCRIPT_PATH, mock_tracker_filename)
+        self.mock_tracker_path = f"/tmp/mock_tracker_{timestamp}.json"
         return self.mock_tracker_path
     
     # add a parameter for the parent working directory
     def _build_bittorrent_command(self, host_ip, is_seeder=False, working_dir=None):
         """Build the command string for running the BitTorrent client."""
         # Use just the filename since the torrent file will be copied to the working directory
+        
+        if working_dir is not None:
+            os.makedirs(working_dir, mode=0o777, exist_ok=True)
+            os.chmod(working_dir, 0o777)
+
         torrent_filename = os.path.basename(self.torrent_file)
         cmd_parts = [self.interpreter, '-m', 'main', torrent_filename]
         
@@ -216,8 +220,7 @@ class BitTorrentMininet:
         
         # Add mock tracker if it exists
         if self.mock_tracker_path:
-            mock_tracker_filename = os.path.basename(self.mock_tracker_path)
-            cmd_parts.extend(['--mock-tracker', mock_tracker_filename])
+            cmd_parts.extend(['--mock-tracker', self.mock_tracker_path])
         
         # Add optional flags
         if self.verbose:
@@ -306,12 +309,7 @@ class BitTorrentMininet:
         for i in range(self.num_seeders + 1, self.num_hosts + 1):
             host = self.net.get(f'h{i}')
             if host:
-                working_dir = os.path.join(self.MAIN_SCRIPT_PATH, f'leecher_{i}')
-                host.cmd(f'mkdir -p {working_dir}')
-                host.cmd(f'cp {self.torrent_file} {working_dir}/')
-
-                if self.mock_tracker_path and os.path.exists(self.mock_tracker_path):
-                    host.cmd(f'cp {self.mock_tracker_path} {working_dir}/')
+                working_dir = f'/tmp/leecher_{i}'
 
                 leecher_cmd = self._build_bittorrent_command(host.IP(), is_seeder=False, working_dir=working_dir)
 
