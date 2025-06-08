@@ -374,7 +374,7 @@ class BitTorrentMininet:
     # Define packet loss rates for each state
     PACKET_LOSS_RATES = {
         0: 1,    # Low interference - 1% packet loss
-        1: 30    # High interference - 10% packet loss
+        1: 25    # High interference - 10% packet loss
     }
 
 
