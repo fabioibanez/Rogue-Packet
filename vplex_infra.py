@@ -13,6 +13,8 @@ import subprocess
 import sys
 import json
 import re
+import random
+
 
 
 class Colors:
@@ -343,6 +345,8 @@ class BitTorrentMininet:
                 leecher_cmd = self._build_bittorrent_command(host.IP(), is_seeder=False, working_dir=working_dir)
 
                 leecher_log = os.path.join(self.host_log_dir, f"h{i}_leecher.log")
+
+                initial_markov_state = 0  # Start with low interference
                 
                 print(f"  {Colors.network(f'h{i}')} ({host.IP()}) → {Colors.file_op(f'h{i}_leecher.log')}")
                 if self.verbose:
@@ -351,7 +355,7 @@ class BitTorrentMininet:
                 full_cmd = f'{leecher_cmd} > {leecher_log} 2>&1'
                 process = host.popen(full_cmd, shell=True)
 
-                leecher_processes.append((f'h{i}', process, leecher_log))
+                leecher_processes.append((f'h{i}', process, leecher_log, initial_markov_state))
         
         return leecher_processes
     
@@ -366,6 +370,56 @@ class BitTorrentMininet:
                 dst = os.path.join(self.host_log_dir, filename)
                 shutil.copy2(src, dst)
                 print(f"  Copied {filename}")
+
+    # Define packet loss rates for each state
+    PACKET_LOSS_RATES = {
+        0: 1,    # Low interference - 1% packet loss
+        1: 10    # High interference - 10% packet loss
+    }
+
+
+    def changePacketLoss(self, node, loss_rate):
+        """Change packet loss for a specific node"""
+        for intf in node.intfList():  # loop on interfaces of node
+            if intf.link:  # get link that connects to interface (if any)
+                intfs = [intf.link.intf1, intf.link.intf2]  # intfs[0] is source, intfs[1] is dst
+                # Apply packet loss to both interfaces
+                intfs[0].config(loss=loss_rate)
+                intfs[1].config(loss=loss_rate)
+
+    def updateMarkovState(self, current_state):
+        """Update a single Markov state and return new state"""
+        rand = random.random()
+        
+        if current_state == 0:  # Currently low interference
+            if rand < self.P[0][1]:  # Probability of transitioning to high
+                return 1
+            return 0
+        else:  # Currently high interference (state == 1)
+            if rand < self.P[1][0]:  # Probability of transitioning to low
+                return 0
+            return 1
+
+    def managePacketLoss(self, leecher_processes, net):
+        """Manage packet loss for all leecher nodes based on Markov states"""
+        for i in range(len(leecher_processes)):
+            # Extract current tuple: (node_name, process, log, markov_state)
+            node_name, process, leecher_log, current_markov_state = leecher_processes[i]
+            
+            # Update Markov state
+            new_markov_state = self.updateMarkovState(current_markov_state)
+            
+            # Update the tuple with new state
+            leecher_processes[i] = (node_name, process, leecher_log, new_markov_state)
+            
+            # Get the actual node from mininet
+            node = net.get(node_name)
+            
+            # Apply packet loss based on new state
+            loss_rate = self.PACKET_LOSS_RATES[new_markov_state]
+            self.changePacketLoss(node, loss_rate)
+            print(f"Node {node_name}: State {current_markov_state} -> {new_markov_state} ({loss_rate}% packet loss)")
+
     
     def _run_bittorrent_clients(self):
         """Run BitTorrent seeders and leechers."""
@@ -396,8 +450,15 @@ class BitTorrentMininet:
         elif self.num_seeders > 0:
             print(Colors.warning("Seeders specified but no seeder file provided"))
         
+
         leecher_processes = self._run_leechers()
         all_processes = seeder_processes + leecher_processes
+
+        # Define transition probabilities for Markov chain (move this to class level)
+        self.P = {
+            0: {0: 0.8, 1: 0.2},  # From low interference: 80% stay low, 20% go high
+            1: {0: 0.3, 1: 0.7}   # From high interference: 30% go low, 70% stay high
+        }
         
         # Monitor simulation
         try:
@@ -407,24 +468,35 @@ class BitTorrentMininet:
             print(Colors.info("Press Ctrl+C to stop\n"))
             
             while True:
-                time.sleep(2)
-                active_leechers = [name for name, proc, log_file in leecher_processes 
+                time.sleep(3)
+                active_leechers = [(name, proc, log_file, markov_state) for name, proc, log_file, markov_state in leecher_processes 
                                  if proc and proc.poll() is None]
-                
                 if self.num_leechers > 0 and not active_leechers:
                     print(Colors.success("All leechers completed!"))
                     break
                 elif self.num_leechers == 0:
                     print(Colors.info("Only seeders running (press Ctrl+C to stop)"))
                     time.sleep(8)
-                    
+                
+                # only apply the managePacketLoss function to the active leechers (get the corresponding entries from leechers_markov)
+                self.managePacketLoss(leecher_processes, self.net)
+
+                # Update the original leecher_processes list with new states from active_leechers
+                active_idx = 0
+                for i, (name, proc, log_file, markov_state) in enumerate(leecher_processes):
+                    if proc and proc.poll() is None:
+                        # Update with new markov state from active_leechers
+                        leecher_processes[i] = active_leechers[active_idx]
+                        active_idx += 1
+
+
             print(Colors.colorize(f"\n🎉 Simulation completed!", Colors.BOLD + Colors.GREEN))
             print(Colors.file_op(f"📁 Logs: {self.host_log_dir}"))
             self._print_log_summary()
             
         except KeyboardInterrupt:
             print(Colors.colorize("\n🛑 Stopping simulation...", Colors.YELLOW))
-            for name, proc, log_file in leecher_processes:
+            for name, proc, log_file, markov_state in leecher_processes:
                 if proc and proc.poll() is None:
                     proc.terminate()
                     print(f"  {Colors.warning(f'Stopped {name}')}")
