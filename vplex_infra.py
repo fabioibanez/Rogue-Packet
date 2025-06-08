@@ -62,16 +62,17 @@ class Colors:
 class DelayedSingleSwitchTopo(Topo):
     """Single switch topology with configurable delay on all links."""
     
-    def __init__(self, k=2, delay='0ms', **opts):
+    def __init__(self, k=2, delay='0ms', loss=0, **opts):
         self.k = k
         self.delay = delay
+        self.loss = loss
         super(DelayedSingleSwitchTopo, self).__init__(**opts)
     
     def build(self):
         switch = self.addSwitch('s1')
         for i in range(self.k):
             host = self.addHost(f'h{i+1}')
-            self.addLink(host, switch, cls=TCLink, delay=self.delay)
+            self.addLink(host, switch, cls=TCLink, delay=self.delay, loss=self.loss)
 
 
 def load_experiments_file(file_path):
@@ -208,7 +209,7 @@ class BitTorrentMininet:
     def _create_topology(self):
         """Create the specified topology with delay configuration."""
         topology_class = self.TOPOLOGY_MAP[self.topology_name]
-        return topology_class(k=self.num_hosts, delay=self.delay)
+        return topology_class(k=self.num_hosts, delay=self.delay, loss=self.args.overall_loss)
     
     def _create_network(self):
         """Create and start the Mininet network."""
@@ -384,8 +385,8 @@ class BitTorrentMininet:
             if intf.link:  # get link that connects to interface (if any)
                 intfs = [intf.link.intf1, intf.link.intf2]  # intfs[0] is source, intfs[1] is dst
                 # Apply packet loss to both interfaces
-                intfs[0].config(loss=loss_rate)
-                intfs[1].config(loss=loss_rate)
+                intfs[0].config(loss=self.args.overall_loss + loss_rate)
+                intfs[1].config(loss=self.args.overall_loss + loss_rate)
 
     def updateMarkovState(self, current_state):
         """Update a single Markov state and return new state"""
@@ -667,6 +668,8 @@ Examples:
                         help='JSON file to store experiment results (default: experiments.json)')
     parser.add_argument('-p', '--markov-prob', type=float, default=0,
                         help="Markov probability")
+    parser.add_argument('--overall-loss', type=float, default=0, 
+                        help="Overall packet loss rate to apply to the network")
     parser.add_argument('--timeout', type=float,
                         help='Maximum time in seconds to run the experiment')
     
