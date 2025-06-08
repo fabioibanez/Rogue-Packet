@@ -195,7 +195,7 @@ class Run(object):
 
         current_log_line = f"Connected peers: {number_of_peers} - {round(percentage_completed, 2)}% completed | {self.pieces_manager.complete_pieces}/{self.pieces_manager.number_of_pieces} pieces | {new_progression} bytes | {time.time() - self.download_start_time}s elapsed"
         if current_log_line != self.last_log_line:
-            print(current_log_line)
+            logging.info(current_log_line)
 
         self.last_log_line = current_log_line
         self.percentage_completed = new_progression
