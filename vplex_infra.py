@@ -202,10 +202,6 @@ class BitTorrentMininet:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.mock_tracker_path = f"/tmp/mock_tracker_{timestamp}.json"
         return self.mock_tracker_path
-
-
-    def _get_working_dir(self, node_index: int, working_dir: str):
-        
     
     # add a parameter for the parent working directory
     def _build_bittorrent_command(self, host_ip, is_seeder=False, working_dir=None):
