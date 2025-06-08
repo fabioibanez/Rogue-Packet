@@ -72,6 +72,31 @@ class DelayedSingleSwitchTopo(Topo):
             self.addLink(host, switch, cls=TCLink, delay=self.delay)
 
 
+def load_experiments_file(file_path):
+    """Load existing experiments from JSON file or create new file if it doesn't exist."""
+    try:
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+def save_experiment(file_path, args_dict, results):
+    """Save a new experiment entry to the experiments file."""
+    experiments = load_experiments_file(file_path)
+    
+    # Create new experiment entry
+    experiment = {
+        "args": args_dict,
+        "results": results
+    }
+    
+    experiments.append(experiment)
+    
+    # Save back to file with pretty printing
+    with open(file_path, 'w') as f:
+        json.dump(experiments, f, indent=2)
+
+
 class BitTorrentMininet:
     """
     A Mininet wrapper for running BitTorrent clients in a simulated network environment.
@@ -89,7 +114,7 @@ class BitTorrentMininet:
     
     def __init__(self, torrent_file, verbose=False, delete_torrent=False, seed=False, 
                  num_seeders=1, num_leechers=2, topology='single', delay='0ms', seeder_file=None, 
-                 auto_install=True, interpreter="python3"):
+                 auto_install=True, args=None):
         self.torrent_file = os.path.abspath(torrent_file)
         self.verbose = verbose
         self.delete_torrent = delete_torrent
@@ -104,7 +129,7 @@ class BitTorrentMininet:
         self.net = None
         self.mock_tracker_path = None  # Will store the path to mock tracker file
         self.log_dir = self._create_log_directory()  # Keep for backward compatibility
-        self.interpreter = interpreter
+        self.args = args  # Store the original args namespace
 
     def _install_requirements(self):
         """Install packages from requirements.txt if it exists."""
@@ -463,7 +488,14 @@ class BitTorrentMininet:
                 print(f"  📄 progress_summary.json")
             except Exception as e:
                 print(Colors.warning(f"Could not save progress summary: {e}"))
-
+            
+            # Save to experiments file if specified
+            if self.args and hasattr(self.args, 'experiments_file'):
+                try:
+                    save_experiment(self.args.experiments_file, vars(self.args), progress_data)
+                    print(Colors.success(f"📊 Experiment results saved to {self.args.experiments_file}"))
+                except Exception as e:
+                    print(Colors.warning(f"Could not save to experiments file: {e}"))
 
     def _cleanup_processes(self, leecher_processes):
         """Clean up any remaining processes."""
@@ -560,14 +592,10 @@ Examples:
                         help='Path to the complete file for seeding (required for seeders)')
     parser.add_argument('--no-auto-install', action='store_true',
                         help='Disable automatic package installation')
-    parser.add_argument('--interpreter', type=str, help='Python interpreter to use for hosts')
+    parser.add_argument('--experiments-file', type=str, default='experiments.json',
+                        help='JSON file to store experiment results (default: experiments.json)')
     
-    return parser.parse_args()
-
-
-def main():
-    """Main entry point."""
-    args = _parse_arguments()
+    args = parser.parse_args()
     
     # Validate arguments
     if args.seeders < 0 or args.leechers < 0:
@@ -581,6 +609,13 @@ def main():
     if args.seeders > 0 and not args.seeder_file:
         print(Colors.warning("Seeders specified but no seeder file provided"))
         print(Colors.info("Seeders may not function properly without complete file"))
+    
+    return args
+
+
+def main():
+    """Main entry point."""
+    args = _parse_arguments()
     
     # Welcome message
     print(Colors.colorize(f"🚀 BitTorrent Mininet Simulation", Colors.BOLD + Colors.CYAN))
@@ -599,7 +634,7 @@ def main():
         delay=args.delay,
         seeder_file=args.seeder_file,
         auto_install=not args.no_auto_install,
-        interpreter=args.interpreter or "python3"
+        args=args  # Pass the full args namespace
     )
     
     bt_mininet.run()
