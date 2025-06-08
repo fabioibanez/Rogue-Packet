@@ -296,8 +296,9 @@ class BitTorrentMininet:
                 host.cmd(full_cmd)
                 seeder_processes.append((f'h{i}', None, seeder_log))
         
-        print(Colors.info("Waiting 10 seconds for seeder(s) to initialize..."))
-        time.sleep(10)
+        delay = 4
+        print(Colors.info(f"Waiting {delay} seconds for seeder(s) to initialize..."))
+        time.sleep(delay)
         return seeder_processes
     
     def _run_leechers(self):
