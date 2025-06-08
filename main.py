@@ -47,6 +47,7 @@ class Run(object):
         self.pieces_manager = PiecesManager(self.torrent)
         self.peers_manager = PeersManager(self.torrent, self.pieces_manager)
         self.peers_manager.start()  # This starts the peer manager thread
+        self.download_start_time = time.time()
 
         self._start_plot_thread()
         
@@ -194,7 +195,7 @@ class Run(object):
         number_of_peers = self.peers_manager.unchoked_peers_count()
         percentage_completed = float((float(new_progression) / self.torrent.total_length) * 100)
 
-        current_log_line = f"Connected peers: {number_of_peers} - {round(percentage_completed, 2)}% completed | {self.pieces_manager.complete_pieces}/{self.pieces_manager.number_of_pieces} pieces | Size: {self.torrent.total_length / (1024*1024):.1f}MB | Time: {int((time.time() - self.download_start_time) // 60)}m{int((time.time() - self.download_start_time) % 60)}s"
+        current_log_line = f"Connected peers: {number_of_peers} - {round(percentage_completed, 2)}% completed | {self.pieces_manager.complete_pieces}/{self.pieces_manager.number_of_pieces} pieces | {new_progression} bytes | {time.time() - self.download_start_time}s elapsed"
         if current_log_line != self.last_log_line:
             print(current_log_line)
 

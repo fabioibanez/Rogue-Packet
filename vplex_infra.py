@@ -419,10 +419,10 @@ class BitTorrentMininet:
             with open(log_file, 'r') as f:
                 for line in f:
                     # Match lines like: Connected peers: 2 - 84.49% completed | 991/1173 pieces | X bytes | XXXs elapsed
-                    match = re.search(r'Connected peers:.+\| (\d+) bytes \| (\d+)s elapsed', line)
+                    match = re.search(r'Connected peers:.+\| (\d+) bytes \| (\d+\.?\d*)s elapsed', line)
                     if match:
                         bytes_transferred = int(match.group(1))
-                        seconds_elapsed = int(match.group(2))
+                        seconds_elapsed = float(match.group(2))
                         last_progress = {
                             "node": node,
                             "bytes": bytes_transferred,
