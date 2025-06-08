@@ -209,7 +209,7 @@ class BitTorrentMininet:
         # Use just the filename since the torrent file will be copied to the working directory
         
         if working_dir is not None:
-            shutil.rmtree(working_dir)
+            if os.path.exists(working_dir): shutil.rmtree(working_dir)
             os.makedirs(working_dir, mode=0o777, exist_ok=True)
             os.chmod(working_dir, 0o777)
 
