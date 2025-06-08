@@ -202,6 +202,10 @@ class BitTorrentMininet:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.mock_tracker_path = f"/tmp/mock_tracker_{timestamp}.json"
         return self.mock_tracker_path
+
+
+    def _get_working_dir(self, node_index: int, working_dir: str):
+        
     
     # add a parameter for the parent working directory
     def _build_bittorrent_command(self, host_ip, is_seeder=False, working_dir=None):
@@ -209,6 +213,7 @@ class BitTorrentMininet:
         # Use just the filename since the torrent file will be copied to the working directory
         
         if working_dir is not None:
+            shutil.rmtree(working_dir)
             os.makedirs(working_dir, mode=0o777, exist_ok=True)
             os.chmod(working_dir, 0o777)
 
