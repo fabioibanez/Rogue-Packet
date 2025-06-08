@@ -16,7 +16,7 @@ from torrent import Torrent
 from tracker import MAX_PEERS_CONNECTED
 
 
-lock = fasteners.InterProcessLock("./mock_tracker.lock")
+lock = fasteners.InterProcessLock("/tmp/mock_tracker.lock")
 
 
 class MockLeecher(BaseModel):
