@@ -48,9 +48,6 @@ class PeersManager(Thread):
         self.pieces_manager = pieces_manager  # Manages pieces/blocks
         self.is_active: bool = True  # Controls the main thread loop
 
-        # Initialize the choking logger
-        self.choking_logger = PeerChokingLogger()
-
         # Events
         pub.subscribe(self.broadcast_have, 'PeersManager.BroadcastHave')
 
@@ -254,12 +251,10 @@ class PeersManager(Thread):
         for peer in to_choke:
             if not peer.am_choking():
                 peer.send_to_peer(Choke())
-                self.choking_logger.log_regular_choke(peer)
 
         for peer in self.unchoked_peers:
             if peer.am_choking():
                 peer.send_to_peer(UnChoke())
-                self.choking_logger.log_regular_unchoke(peer)
     
     def update_unchoked_optimistic_peers(self) -> None:
         eligible_peers = [peer for peer in self.peers if peer.is_interested() and peer.am_choking()]
@@ -270,10 +265,7 @@ class PeersManager(Thread):
         # Choke the old optimistically unchoked peer
         if self.unchoked_optimistic_peer is not None:
             self.unchoked_optimistic_peer.send_to_peer(Choke())
-            self.choking_logger.log_optimistic_choke(self.unchoked_optimistic_peer)
         
         lucky_peer = random.choice(eligible_peers)
         lucky_peer.send_to_peer(UnChoke())
         self.unchoked_optimistic_peer = lucky_peer
-        
-        self.choking_logger.log_optimistic_unchoke(lucky_peer)

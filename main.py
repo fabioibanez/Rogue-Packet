@@ -48,8 +48,6 @@ class Run(object):
         self.peers_manager = PeersManager(self.torrent, self.pieces_manager)
         self.peers_manager.start()  # This starts the peer manager thread
         self.download_start_time = time.time()
-
-        self._start_plot_thread()
         
         logging.info("PeersManager Started")
         logging.info("PiecesManager Started")
