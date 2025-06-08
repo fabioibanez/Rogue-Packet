@@ -450,7 +450,6 @@ class BitTorrentMininet:
             seeder_processes = self._run_seeders()
         elif self.num_seeders > 0:
             print(Colors.warning("Seeders specified but no seeder file provided"))
-        
 
         self.leecher_processes = self._run_leechers()
         
@@ -459,12 +458,26 @@ class BitTorrentMininet:
             print(Colors.colorize(f"\n🚀 BitTorrent simulation running...", Colors.BOLD))
             print(Colors.file_op(f"📁 Real-time logs: {self.host_log_dir}"))
             print(Colors.info(f"💡 Monitor logs: tail -f {self.host_log_dir}/*.log"))
+            if self.args.timeout:
+                print(Colors.info(f"⏰ Timeout set: {self.args.timeout} seconds"))
             print(Colors.info("Press Ctrl+C to stop\n"))
             
+            start_time = time.time()
             while True:
                 time.sleep(3)
                 active_leechers = [(name, proc, log_file, markov_state) for name, proc, log_file, markov_state in self.leecher_processes 
-                                 if proc and proc.poll() is None]
+                                if proc and proc.poll() is None]
+                
+                # Check if we've exceeded timeout
+                if self.args.timeout and (time.time() - start_time) > self.args.timeout:
+                    print(Colors.warning(f"\n⏰ Timeout reached after {self.args.timeout} seconds"))
+                    # Kill remaining leechers
+                    for name, proc, _, _ in active_leechers:
+                        if proc and proc.poll() is None:
+                            proc.terminate()
+                            print(Colors.warning(f"  Stopped {name} due to timeout"))
+                    break
+                
                 if self.num_leechers > 0 and not active_leechers:
                     print(Colors.success("All leechers completed!"))
                     break
@@ -472,11 +485,11 @@ class BitTorrentMininet:
                     print(Colors.info("Only seeders running (press Ctrl+C to stop)"))
                     time.sleep(8)
                 
-                # only apply the managePacketLoss function to the active leechers (get the corresponding entries from leechers_markov)
+                # only apply the managePacketLoss function to the active leechers
                 self.managePacketLoss()
 
-
-            print(Colors.colorize(f"\n🎉 Simulation completed!", Colors.BOLD + Colors.GREEN))
+            completion_status = "timeout" if (self.args.timeout and (time.time() - start_time) > self.args.timeout) else "completed"
+            print(Colors.colorize(f"\n🎉 Simulation {completion_status}!", Colors.BOLD + Colors.GREEN))
             print(Colors.file_op(f"📁 Logs: {self.host_log_dir}"))
             self._print_log_summary()
             
@@ -626,8 +639,8 @@ Examples:
   # Custom peer counts with network delay
   python3 script.py torrent.torrent --seeders 2 --leechers 4 --delay 100ms --seeder-file complete.txt
   
-  # Verbose mode
-  python3 script.py torrent.torrent --seeder-file complete.txt -v
+  # Verbose mode with timeout
+  python3 script.py torrent.torrent --seeder-file complete.txt -v --timeout 300
         """
     )
     
@@ -654,6 +667,8 @@ Examples:
                         help='JSON file to store experiment results (default: experiments.json)')
     parser.add_argument('-p', '--markov-prob', type=float, default=0,
                         help="Markov probability")
+    parser.add_argument('--timeout', type=float,
+                        help='Maximum time in seconds to run the experiment')
     
     args = parser.parse_args()
     
