@@ -11,6 +11,7 @@ keep track of choke/unchoke set
 '''
 
 import random
+import time
 from typing import Iterable
 
 from bitstring import BitArray
@@ -100,6 +101,7 @@ class PeersManager(Thread):
                 if len(buff) <= 0:
                     break
 
+                time.sleep(0.0001)
                 data += buff
             except socket.error as e:
                 err: int = e.args[0]
