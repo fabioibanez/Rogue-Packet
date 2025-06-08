@@ -418,7 +418,8 @@ class BitTorrentMininet:
             # Apply packet loss based on new state
             loss_rate = self.PACKET_LOSS_RATES[new_markov_state]
             self.changePacketLoss(node, loss_rate)
-            print(f"Node {node_name}: State {current_markov_state} -> {new_markov_state} ({loss_rate}% packet loss)")
+            if self.verbose:
+                print(f"Node {node_name}: State {current_markov_state} -> {new_markov_state} ({loss_rate}% packet loss)")
 
     
     def _run_bittorrent_clients(self):
