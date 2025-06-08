@@ -487,7 +487,8 @@ class BitTorrentMininet:
                     time.sleep(8)
                 
                 # only apply the managePacketLoss function to the active leechers
-                self.managePacketLoss()
+                if self.args.markov_prob is not None:
+                    self.managePacketLoss()
 
             completion_status = "timeout" if (self.args.timeout and (time.time() - start_time) > self.args.timeout) else "completed"
             print(Colors.colorize(f"\n🎉 Simulation {completion_status}!", Colors.BOLD + Colors.GREEN))
@@ -666,7 +667,7 @@ Examples:
                         help='Disable automatic package installation')
     parser.add_argument('--experiments-file', type=str, default='experiments.json',
                         help='JSON file to store experiment results (default: experiments.json)')
-    parser.add_argument('-p', '--markov-prob', type=float, default=0,
+    parser.add_argument('-p', '--markov-prob', type=float,
                         help="Markov probability")
     parser.add_argument('--overall-loss', type=float, default=0, 
                         help="Overall packet loss rate to apply to the network")
