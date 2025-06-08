@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import json
+import re
 
 
 class Colors:
@@ -391,7 +392,6 @@ class BitTorrentMininet:
                     print(Colors.info("Only seeders running (press Ctrl+C to stop)"))
                     time.sleep(8)
                     
-            self._create_summary_log(all_processes)
             print(Colors.colorize(f"\n🎉 Simulation completed!", Colors.BOLD + Colors.GREEN))
             print(Colors.file_op(f"📁 Logs: {self.host_log_dir}"))
             self._print_log_summary()
@@ -403,45 +403,38 @@ class BitTorrentMininet:
                     proc.terminate()
                     print(f"  {Colors.warning(f'Stopped {name}')}")
             
-            self._create_summary_log(all_processes, interrupted=True)
             print(Colors.file_op(f"📁 Logs saved: {self.host_log_dir}"))
     
-    def _create_summary_log(self, all_processes, interrupted=False):
-        """Create a summary log with run information."""
-        summary_file = os.path.join(self.host_log_dir, "run_summary.log")
+    def _parse_leecher_log(self, log_file):
+        """Parse a leecher log file and extract the last progress line.
         
-        with open(summary_file, 'w') as f:
-            f.write(f"BitTorrent Mininet Simulation Summary\n")
-            f.write(f"{'='*60}\n")
-            f.write(f"Timestamp: {datetime.datetime.now()}\n")
-            f.write(f"Status: {'INTERRUPTED' if interrupted else 'COMPLETED'}\n\n")
+        Returns:
+            dict: Dictionary containing node, bytes, and seconds, or None if no valid line found
+        """
+        last_progress = None
+        node = os.path.basename(log_file).split('_')[0]  # Extract h1, h2, etc.
+        
+        try:
+            with open(log_file, 'r') as f:
+                for line in f:
+                    # Match lines like: Connected peers: 2 - 84.49% completed | 991/1173 pieces | X bytes | XXXs elapsed
+                    match = re.search(r'Connected peers:.+\| (\d+) bytes \| (\d+)s elapsed', line)
+                    if match:
+                        bytes_transferred = int(match.group(1))
+                        seconds_elapsed = int(match.group(2))
+                        last_progress = {
+                            "node": node,
+                            "bytes": bytes_transferred,
+                            "seconds": seconds_elapsed
+                        }
+        except Exception as e:
+            print(Colors.warning(f"Could not parse log file {log_file}: {e}"))
+            return None
             
-            f.write(f"Configuration:\n")
-            f.write(f"  Torrent file: {self.torrent_file}\n")
-            f.write(f"  Seeder file: {self.seeder_file or 'None'}\n")
-            f.write(f"  Mock tracker: {os.path.basename(self.mock_tracker_path) if self.mock_tracker_path else 'None'}\n")
-            f.write(f"  Topology: {self.topology_name}\n")
-            f.write(f"  Network delay: {self.delay}\n")
-            f.write(f"  Verbose mode: {self.verbose}\n\n")
-            
-            f.write(f"Network Setup:\n")
-            f.write(f"  Seeders: {self.num_seeders}\n")
-            f.write(f"  Leechers: {self.num_leechers}\n")
-            f.write(f"  Total hosts: {self.num_hosts}\n\n")
-            
-            f.write(f"Host Information:\n")
-            for i in range(1, self.num_hosts + 1):
-                host = self.net.get(f'h{i}') if self.net else None
-                role = "seeder" if i <= self.num_seeders else "leecher"
-                f.write(f"  h{i} ({role}): {host.IP() if host else 'N/A'}\n")
-            
-            f.write(f"\nLog Files:\n")
-            for name, proc, log_file in all_processes:
-                log_filename = os.path.basename(log_file)
-                f.write(f"  {log_filename}\n")
-    
+        return last_progress
+
     def _print_log_summary(self):
-        """Print a summary of available log files."""
+        """Print a summary of available log files and generate JSON summary."""
         print(f"\n📋 Log files in {self.host_log_dir}:")
         
         # Print seeder logs
@@ -450,16 +443,27 @@ class BitTorrentMininet:
             if os.path.exists(seeder_log):
                 print(f"  📄 h{i}_seeder.log")
         
-        # Print leecher logs
+        # Print leecher logs and collect progress data
+        progress_data = []
         for i in range(self.num_seeders + 1, self.num_hosts + 1):
             leecher_log = os.path.join(self.host_log_dir, f"h{i}_leecher.log")
             if os.path.exists(leecher_log):
                 print(f"  📄 h{i}_leecher.log")
+                progress = self._parse_leecher_log(leecher_log)
+                if progress:
+                    progress_data.append(progress)
         
-        summary_file = os.path.join(self.host_log_dir, "run_summary.log")
-        if os.path.exists(summary_file):
-            print(f"  📄 run_summary.log")
-    
+        # Save progress data as JSON
+        if progress_data:
+            json_file = os.path.join(self.host_log_dir, "progress_summary.json")
+            try:
+                with open(json_file, 'w') as f:
+                    json.dump(progress_data, f, indent=2)
+                print(f"  📄 progress_summary.json")
+            except Exception as e:
+                print(Colors.warning(f"Could not save progress summary: {e}"))
+
+
     def _cleanup_processes(self, leecher_processes):
         """Clean up any remaining processes."""
         for name, proc, log_file in leecher_processes:
