@@ -30,24 +30,25 @@ def calculate_average_download_time(results):
     total_time = sum(node['seconds'] for node in results)
     return total_time / len(results)
 
-def group_experiments_by_markov_prob(experiments):
-    """Group experiments by markov_prob, treating each node as a separate data point."""
+def group_experiments_by_packet_loss(experiments):
+    """Group experiments by overall_loss, treating each node as a separate data point."""
     grouped = defaultdict(list)
     
     for experiment in experiments:
-        markov_prob = experiment['args']['markov_prob']
+        # Extract packet loss rate from args
+        packet_loss_rate = experiment['args']['overall_loss']
         
         # Treat each node as a separate data point - calculate throughput
         for node_result in experiment['results']:
             bytes_transferred = node_result['bytes']
             time_seconds = node_result['seconds']
-            # Convert to MB/s (bytes -> MB by dividing by 1024*1024)
-            throughput_mbps = (bytes_transferred / (1024 * 1024)) / time_seconds
-            grouped[markov_prob].append(throughput_mbps)
+            # Convert to KB/s
+            throughput_kbps = (bytes_transferred / 1024) / time_seconds
+            grouped[packet_loss_rate].append(throughput_kbps)
     
-    # Calculate mean, std, and confidence intervals for each markov_prob
+    # Calculate mean, std, and confidence intervals for each packet loss rate
     stats = {}
-    for prob, throughputs in grouped.items():
+    for loss_rate, throughputs in grouped.items():
         n = len(throughputs)
         mean_throughput = np.mean(throughputs)
         std_throughput = np.std(throughputs, ddof=1) if n > 1 else 0  # Sample standard deviation
@@ -63,11 +64,11 @@ def group_experiments_by_markov_prob(experiments):
         else:
             confidence_interval = (mean_throughput, mean_throughput)
         
-        stats[prob] = {
+        stats[loss_rate] = {
             'mean': mean_throughput,
             'std': std_throughput,
             'count': n,
-            'throughputs': throughputs,  # Changed from 'times' to 'throughputs'
+            'throughputs': throughputs,
             'confidence_interval': confidence_interval,
             'min': min(throughputs),
             'max': max(throughputs)
@@ -75,14 +76,14 @@ def group_experiments_by_markov_prob(experiments):
     
     return stats
 
-def plot_markov_vs_download_time(stats, output_file=None, show_individual_points=True):
-    """Plot Markov probability vs average throughput with confidence intervals."""
-    # Sort by markov probability
-    sorted_probs = sorted(stats.keys())
-    means = [stats[prob]['mean'] for prob in sorted_probs]
-    stds = [stats[prob]['std'] for prob in sorted_probs]
-    counts = [stats[prob]['count'] for prob in sorted_probs]
-    confidence_intervals = [stats[prob]['confidence_interval'] for prob in sorted_probs]
+def plot_packet_loss_vs_throughput(stats, output_file=None, show_individual_points=True):
+    """Plot packet loss rate vs average throughput with confidence intervals."""
+    # Sort by packet loss rate
+    sorted_loss_rates = sorted(stats.keys())
+    means = [stats[rate]['mean'] for rate in sorted_loss_rates]
+    stds = [stats[rate]['std'] for rate in sorted_loss_rates]
+    counts = [stats[rate]['count'] for rate in sorted_loss_rates]
+    confidence_intervals = [stats[rate]['confidence_interval'] for rate in sorted_loss_rates]
     
     # Extract confidence interval bounds
     ci_lower = [ci[0] for ci in confidence_intervals]
@@ -94,40 +95,43 @@ def plot_markov_vs_download_time(stats, output_file=None, show_individual_points
     
     # Plot individual data points if requested
     if show_individual_points:
-        for prob in sorted_probs:
-            throughputs = stats[prob]['throughputs']
+        for loss_rate in sorted_loss_rates:
+            throughputs = stats[loss_rate]['throughputs']
             # Add small random jitter to x-axis for visibility
-            x_jitter = np.random.normal(prob, 0.01, len(throughputs))
+            x_jitter = np.random.normal(loss_rate, 0.001, len(throughputs))  # Smaller jitter for loss rates
             plt.scatter(x_jitter, throughputs, alpha=0.6, color='lightblue', s=40, 
-                       label='Individual nodes' if prob == sorted_probs[0] else "")
+                       label='Individual nodes' if loss_rate == sorted_loss_rates[0] else "")
     
     # Plot mean with confidence interval error bars
-    plt.errorbar(sorted_probs, means, yerr=ci_errors, 
+    plt.errorbar(sorted_loss_rates, means, yerr=ci_errors, 
                 marker='o', linewidth=2, markersize=10, capsize=8, capthick=3,
                 color='darkblue', ecolor='blue', label='Mean ± 95% CI')
     
     # Connect points with a line
-    plt.plot(sorted_probs, means, '--', alpha=0.7, color='red', linewidth=2)
+    plt.plot(sorted_loss_rates, means, '--', alpha=0.7, color='red', linewidth=2)
     
     # Annotations for sample sizes
-    for i, (prob, count) in enumerate(zip(sorted_probs, counts)):
-        plt.annotate(f'n={count}', (prob, means[i]), 
+    for i, (loss_rate, count) in enumerate(zip(sorted_loss_rates, counts)):
+        plt.annotate(f'n={count}', (loss_rate, means[i]), 
                     textcoords="offset points", xytext=(0,15), ha='center', 
                     fontsize=10, fontweight='bold')
     
-    plt.xlabel('Transition Probability p', fontsize=14)
-    plt.ylabel('Average Throughput (MB/s)', fontsize=14)
-    plt.title('BitTorrent Throughput vs Network Interference\n(Each Node Treated as Independent Sample)', 
+    plt.xlabel('Packet Loss Rate (%)', fontsize=14)
+    plt.ylabel('Average Throughput (KB/s)', fontsize=14)
+    plt.title('BitTorrent Throughput vs Packet Loss Rate\n(Each Node Treated as Independent Sample)', 
               fontsize=16, pad=20)
     plt.grid(True, alpha=0.3)
     plt.legend(fontsize=12)
     
     # Add summary statistics as text
     total_nodes = sum(counts)
-    total_experiments = len(set(prob for prob in sorted_probs))
+    total_experiments = len(set(rate for rate in sorted_loss_rates))
     plt.text(0.02, 0.98, f'Total Nodes: {total_nodes}\nTotal Experiments: {total_experiments}', 
              transform=plt.gca().transAxes, verticalalignment='top',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8), fontsize=11)
+    
+    # Set y-axis limit
+    plt.ylim(0, max(means) * 1.2)  # Dynamic upper limit based on data
     
     plt.tight_layout()
     
@@ -139,67 +143,65 @@ def plot_markov_vs_download_time(stats, output_file=None, show_individual_points
 
 def print_summary_statistics(stats):
     """Print summary statistics for the experiments."""
-    print("\n" + "="*85)
-    print("EXPERIMENT SUMMARY STATISTICS (Throughput - Each Node as Independent Sample)")
-    print("="*85)
+    print("="*95)
+    print("EXPERIMENT SUMMARY STATISTICS (Throughput in KB/s vs Packet Loss Rate)")
+    print("="*95)
     
-    sorted_probs = sorted(stats.keys())
+    sorted_loss_rates = sorted(stats.keys())
     
-    print(f"{'Markov Prob':<12} {'Mean (MB/s)':<12} {'Std Dev':<12} {'Count':<8} {'Min':<8} {'Max':<8} {'95% CI':<20}")
-    print("-" * 85)
+    print(f"{'Loss Rate (%)':<12} {'Mean (KB/s)':<14} {'Std Dev':<12} {'Count':<8} {'Min':<10} {'Max':<10} {'95% CI':<25}")
+    print("-" * 95)
     
-    for prob in sorted_probs:
-        mean_throughput = stats[prob]['mean']
-        std_throughput = stats[prob]['std']
-        count = stats[prob]['count']
-        min_throughput = stats[prob]['min']
-        max_throughput = stats[prob]['max']
-        ci_lower, ci_upper = stats[prob]['confidence_interval']
+    for loss_rate in sorted_loss_rates:
+        mean_throughput = stats[loss_rate]['mean']
+        std_throughput = stats[loss_rate]['std']
+        count = stats[loss_rate]['count']
+        min_throughput = stats[loss_rate]['min']
+        max_throughput = stats[loss_rate]['max']
+        ci_lower, ci_upper = stats[loss_rate]['confidence_interval']
         ci_str = f"[{ci_lower:.3f}, {ci_upper:.3f}]"
         
-        print(f"{prob:<12.2f} {mean_throughput:<12.3f} {std_throughput:<12.3f} {count:<8} {min_throughput:<8.3f} {max_throughput:<8.3f} {ci_str:<20}")
+        print(f"{loss_rate:<12.2f} {mean_throughput:<14.3f} {std_throughput:<12.3f} {count:<8} "
+              f"{min_throughput:<10.3f} {max_throughput:<10.3f} {ci_str:<25}")
     
     # Overall statistics
     all_throughputs = []
-    total_experiments = len(sorted_probs)
-    for prob_stats in stats.values():
-        all_throughputs.extend(prob_stats['throughputs'])
+    total_experiments = len(sorted_loss_rates)
+    for rate_stats in stats.values():
+        all_throughputs.extend(rate_stats['throughputs'])
     
-    print("\n" + "-" * 85)
+    print("\n" + "-" * 95)
     print(f"Overall Statistics:")
-    print(f"  Total Markov Probability Levels: {total_experiments}")
+    print(f"  Total Packet Loss Rate Levels: {total_experiments}")
     print(f"  Total Individual Nodes: {len(all_throughputs)}")
-    print(f"  Overall Mean: {np.mean(all_throughputs):.3f} MB/s")
-    print(f"  Overall Std Dev: {np.std(all_throughputs, ddof=1):.3f} MB/s")
-    print(f"  Min Node Throughput: {min(all_throughputs):.3f} MB/s")
-    print(f"  Max Node Throughput: {max(all_throughputs):.3f} MB/s")
+    print(f"  Overall Mean: {np.mean(all_throughputs):.3f} KB/s")
+    print(f"  Overall Std Dev: {np.std(all_throughputs, ddof=1):.3f} KB/s")
+    print(f"  Min Node Throughput: {min(all_throughputs):.3f} KB/s")
+    print(f"  Max Node Throughput: {max(all_throughputs):.3f} KB/s")
 
 def create_sample_data():
     """Create sample data for demonstration."""
     import random
     
-    # Sample data with different markov probabilities
+    # Sample data with different packet loss rates
     sample_experiments = []
     
-    markov_probs = [0.1, 0.3, 0.5, 0.7, 0.9]
+    loss_rates = [0.5, 2.0, 5.0, 10.0, 15.0]  # Packet loss rates in %
     
-    for prob in markov_probs:
-        # Simulate 3-5 experiments per probability
+    for loss_rate in loss_rates:
+        # Simulate 3-5 experiments per loss rate
         for _ in range(random.randint(3, 5)):
-            # Base time increases with higher interference probability
-            base_time = 15 + (prob * 20)  # 15-35 seconds base
-            
             results = []
             for node_num in range(2, 6):  # h2 to h5
-                # Add some randomness - higher probability = lower throughput
-                base_throughput = 3.0 - (prob * 2.0)  # 3.0 MB/s at p=0, 1.0 MB/s at p=1
+                # Higher packet loss = lower throughput
+                base_throughput_kbps = 60.0 - (loss_rate * 3.0)  # 60 KB/s at 0% loss, decreasing
                 throughput_variation = random.uniform(0.8, 1.2)
-                node_throughput = base_throughput * throughput_variation + random.uniform(-0.2, 0.2)
-                node_throughput = max(0.1, node_throughput)  # Minimum 0.1 MB/s
+                node_throughput = base_throughput_kbps * throughput_variation + random.uniform(-5, 5)
+                node_throughput = max(5.0, node_throughput)  # Minimum 5 KB/s
                 
                 # Convert back to time for the JSON structure (assuming 2MB file)
-                file_size_mb = 2.0  # 2MB file
-                download_time = file_size_mb / node_throughput
+                file_size_kb = 2048  # 2MB in KB
+                download_time = file_size_kb / node_throughput
                 
                 results.append({
                     "node": f"h{node_num}",
@@ -220,7 +222,7 @@ def create_sample_data():
                     "seeder_file": "seeder_sources/torrent_1.dat",
                     "no_auto_install": False,
                     "experiments_file": "experiments.json",
-                    "markov_prob": prob
+                    "overall_loss": loss_rate  # Changed from markov_prob to overall_loss
                 },
                 "results": results
             }
@@ -229,7 +231,7 @@ def create_sample_data():
     return sample_experiments
 
 def main():
-    parser = argparse.ArgumentParser(description='Plot Markov probability vs download time')
+    parser = argparse.ArgumentParser(description='Plot packet loss rate vs throughput')
     parser.add_argument('json_file', nargs='?', help='JSON file containing experiment results')
     parser.add_argument('-o', '--output', help='Output file for the plot (e.g., plot.png)')
     parser.add_argument('--no-points', action='store_true', help='Hide individual data points')
@@ -250,8 +252,8 @@ def main():
         parser.print_help()
         return
     
-    # Group experiments by markov probability
-    stats = group_experiments_by_markov_prob(experiments)
+    # Group experiments by packet loss rate
+    stats = group_experiments_by_packet_loss(experiments)
     
     if not stats:
         print("No valid experiment data found")
@@ -261,7 +263,7 @@ def main():
     print_summary_statistics(stats)
     
     # Create plot
-    plot_markov_vs_download_time(stats, args.output, not args.no_points)
+    plot_packet_loss_vs_throughput(stats, args.output, not args.no_points)
 
 if __name__ == "__main__":
     main()
