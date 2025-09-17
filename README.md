@@ -61,12 +61,12 @@ I wouldn't have gone that far without the help of
 [Bittorrent Unofficial Spec](https://wiki.theory.org/BitTorrentSpecification "Bittorrent Unofficial Spec"), so thank you.
 
 
-## TODO
+## Additions to the original code
 - [Done-Shounak] Optimistic Unchoking, random optimistic unchoking 
 - [Done-Yousef] Send peers the `HAVE` message + Testing (testing left)
 - [Done-Fabio] Non-optimistic unchoking, auction-strategy which is built into BitTorrent
 - [Done-Jacob] Rarest Piece Selection, what is my current state of the world
-- [] Figure out a testbed (that is the only way to test have messages)
+- Figure out a testbed (that is the only way to test have messages)
 
 ### Implementation Notes
 
